@@ -126,32 +126,39 @@ def process_candidate(
     """
     try:
         topic = (candidate.get("topic") or candidate.get("title") or "").strip()
-        hits = corpus.search(topic, root, limit=3) if topic else []
+        kind = candidate.get("kind", "")
+
+        # Decisions are first-class, dated, standalone zettels: they are
+        # created as their own note (never merged into a generic concept
+        # note, which would bury the authoritative choice). A later
+        # decision on the same topic becomes a new dated note — both are
+        # kept as history (write() refuses to overwrite by filename).
+        is_decision = kind == "decision"
 
         target_ref = None
-        if hits:
-            notes = []
-            for h in hits:
-                ref = h.get("uuid") or h.get("slug")
-                if not ref:
-                    continue
-                result = corpus.read(ref, root, resolve_links=False)
-                if result["found"]:
-                    notes.append(result["note"])
-            if notes:
-                decision = judge_merge(candidate, notes, llm)
-                if decision and decision.get("action") == "merge":
-                    candidate_ref = (decision.get("merge_target_ref") or "").strip()
-                    valid_refs = {n.get("uuid") for n in notes if n.get("uuid")}
-                    if candidate_ref and candidate_ref in valid_refs:
-                        target_ref = candidate_ref
-                    elif candidate_ref:
-                        logger.warning(
-                            "zk-memory: merge_target_ref %r not among fetched hits; falling back to create",
-                            candidate_ref,
-                        )
-
-        kind = candidate.get("kind", "")
+        if not is_decision and topic:
+            hits = corpus.search(topic, root, limit=3)
+            if hits:
+                notes = []
+                for h in hits:
+                    ref = h.get("uuid") or h.get("slug")
+                    if not ref:
+                        continue
+                    result = corpus.read(ref, root, resolve_links=False)
+                    if result["found"]:
+                        notes.append(result["note"])
+                if notes:
+                    decision = judge_merge(candidate, notes, llm)
+                    if decision and decision.get("action") == "merge":
+                        candidate_ref = (decision.get("merge_target_ref") or "").strip()
+                        valid_refs = {n.get("uuid") for n in notes if n.get("uuid")}
+                        if candidate_ref and candidate_ref in valid_refs:
+                            target_ref = candidate_ref
+                        elif candidate_ref:
+                            logger.warning(
+                                "zk-memory: merge_target_ref %r not among fetched hits; falling back to create",
+                                candidate_ref,
+                            )
 
         if target_ref:
             content = (candidate.get("content") or "").strip()
@@ -164,6 +171,12 @@ def process_candidate(
             result = corpus.merge(target_ref, content, root, source=source)
             if not result.get("ok"):
                 logger.warning("zk-memory: merge failed: %s", result.get("err"))
+                tracer(
+                    "candidate_decision", root, kind=kind, topic=topic,
+                    action="merge_failed", target=target_ref, ok=False,
+                    err=result.get("err"),
+                )
+                return None
             tracer(
                 "candidate_decision", root, kind=kind, topic=topic,
                 action="merge", target=target_ref, ok=result.get("ok"),
@@ -181,9 +194,27 @@ def process_candidate(
                 action="create_skipped_incomplete",
             )
             return None
-        result = corpus.write(slug, title, content, root, source=source)
+
+        body = content
+        if is_decision:
+            choice = (candidate.get("choice") or "").strip()
+            rationale = (candidate.get("rationale") or "").strip()
+            parts = []
+            if choice:
+                parts.append(f"**Decision:** {choice}")
+            parts.append(content)
+            if rationale:
+                parts.append(f"**Rationale:** {rationale}")
+            body = "\n\n".join(parts)
+
+        result = corpus.write(slug, title, body, root, source=source)
         if not result.get("ok"):
             logger.warning("zk-memory: create failed: %s", result.get("err"))
+            tracer(
+                "candidate_decision", root, kind=kind, topic=topic,
+                action="create_failed", slug=slug, ok=False, err=result.get("err"),
+            )
+            return None
         tracer(
             "candidate_decision", root, kind=kind, topic=topic,
             action="create", slug=slug, ok=result.get("ok"), err=result.get("err"),

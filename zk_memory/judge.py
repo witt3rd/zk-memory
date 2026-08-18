@@ -16,6 +16,9 @@ Two stages:
        - "entity_update": a temporal/attribute-level fact (e.g. "Judy
          arriving in two weeks") that would be a useless orphan as its
          own note — it belongs appended to an existing entity note.
+       - "decision": a commitment or choice that was made — recorded as
+         an authoritative, dated, recallable fact (choice, alternatives,
+         rationale), written as a standalone decision zettel.
 
   2. judge_merge — one call per candidate, given the full body of every
      corpus hit for that candidate's topic (fetched, not just snippets).
@@ -87,14 +90,20 @@ _DISTILL_SCHEMA: dict[str, Any] = {
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "enum": ["concept", "entity_update"],
+                        "enum": ["concept", "entity_update", "decision"],
                         "description": (
                             "'concept': a self-contained evergreen "
                             "idea, substantial enough to stand alone "
                             "as a new node. 'entity_update': a "
                             "temporal or attribute-level fact about "
                             "an existing entity/topic — would be a "
-                            "useless orphan as its own note."
+                            "useless orphan as its own note. "
+                            "'decision': a commitment or choice that "
+                            "was made — the thing decided, the "
+                            "alternatives considered and rejected, "
+                            "and the rationale. Recorded as an "
+                            "authoritative, dated, recallable fact "
+                            "(not just the topic it was about)."
                         ),
                     },
                     "topic": {
@@ -120,7 +129,40 @@ _DISTILL_SCHEMA: dict[str, Any] = {
                             "For 'concept': the full atomic thought, "
                             "own words, one idea. For "
                             "'entity_update': just the fact/update "
-                            "fragment, own words, not a transcript."
+                            "fragment, own words, not a transcript. "
+                            "For 'decision': the decision itself, own "
+                            "words — include the choice made, the "
+                            "alternatives considered (and rejected), "
+                            "and the rationale. Phrase it so a future "
+                            "session can answer 'what did we decide?' "
+                            "verbatim (e.g. 'we decided to adopt "
+                            "blue-green deploys and keep "
+                            "last-deploy-k valid for rollback')."
+                        ),
+                    },
+                    "choice": {
+                        "type": "string",
+                        "description": (
+                            "For 'decision': the thing that was "
+                            "decided, in a few words (e.g. 'adopt "
+                            "blue-green deploys, keep last-deploy-k "
+                            "for rollback'). Optional for other kinds."
+                        ),
+                    },
+                    "alternatives": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "For 'decision': the alternatives that "
+                            "were considered and rejected, one string "
+                            "each. Optional."
+                        ),
+                    },
+                    "rationale": {
+                        "type": "string",
+                        "description": (
+                            "For 'decision': why this choice was "
+                            "made, own words. Optional."
                         ),
                     },
                 },
@@ -133,8 +175,7 @@ _DISTILL_SYSTEM_PROMPT = """You are the write-time distiller for a zettelkasten 
 Given a piece of conversation (a single turn, or a longer excerpt about to \
 be dropped by context compaction), extract zero or more retain candidates.
 
-There are two very different kinds of output, and conflating them ruins the \
-corpus:
+There are three kinds of output, and conflating them ruins the corpus:
 
 - CONCEPT: a self-contained, evergreen idea. It has enough conceptual weight \
 to stand entirely on its own as a new node, ready to be linked to other \
@@ -143,6 +184,18 @@ ideas.
 arriving in two weeks"). If made its own standalone note, it would be a \
 useless orphan. It belongs appended to an existing entity/topic note \
 instead.
+- DECISION: a commitment or choice that was made. The turn records what was \
+decided (not merely what was discussed) — a choice made, alternatives \
+weighed and rejected, a rationale, a direction adopted. Record the DECISION \
+itself, verbatim in your own words: the choice (e.g. "we decided to adopt \
+blue-green deploys and keep last-deploy-k valid for rollback"), the \
+alternatives considered, and the rationale. Do NOT reduce a decision to a \
+generic concept about its topic — a decision must be recallable by a future \
+session as an authoritative fact ('what did we decide?').
+
+When in doubt: a general discussion of tradeoffs with no commitment is a \
+CONCEPT; a turn that makes a call ("we should X", "we chose Y over Z", "let's \
+commit to X") is a DECISION.
 
 Most turns yield nothing: routine questions, small talk, tool mechanics, and \
 anything already obvious from context are not worth retaining at all — \

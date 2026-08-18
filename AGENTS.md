@@ -101,10 +101,15 @@ unchanged); a notebook implements it with whatever JSON mode it has.
 compaction batch):
 
 1. **Distill** — one call, sees only the transcript, zero corpus visibility.
-   Splits it into candidates tagged `concept` or `entity_update`.
+   Splits it into candidates tagged `concept` (an evergreen idea),
+   `entity_update` (a temporal/attribute fact that belongs on an existing
+   note), or `decision` (a commitment/choice made — recorded as an
+   authoritative, dated, recallable fact with choice/alternatives/rationale).
 2. **Per candidate** — `search` its topic (no LLM). No hits → straight to
    create. Hits → fetch full bodies and make **one** comparison call across
    all of them (`judge_merge`) deciding merge-into-existing vs. create.
+   Decisions skip this step entirely (never merge) and always become a
+   standalone dated zettel.
 3. **Write** — `merge` (append-only) or `write` (new note).
 
 ## Mechanisms
