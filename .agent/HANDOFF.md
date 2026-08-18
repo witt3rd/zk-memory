@@ -1,11 +1,10 @@
 # HANDOFF — zk-memory
 
-**Last updated:** 2026-08-17 — split from `hermes-zk-memory` (initial commit `9036bc9`, pushed to `origin/main`).
+**Last updated:** 2026-08-17 — split complete; `v0.1.0` tagged; plugin pinned to it.
 
 ## State
 
-- `main` at `origin/main` tip (`9036bc9`), primary clone clean. First commit *is* mainline — this
-  repo has no prior history.
+- `main` at `origin/main` tip, tagged **`v0.1.0`** (pushed). Primary clone clean.
 - **59 tests pass** (`.venv/bin/python -m pytest`). Venv: `uv venv .venv` + `uv pip install -e . pytest`.
 - GitHub: `witt3rd/zk-memory` (public, matches sibling repos).
 
@@ -13,7 +12,7 @@
 
 The **host-agnostic library half** of the split (same shape as `prospecta` / `hermes-prospecta`):
 a zettelkasten memory with zero Hermes / `agent.*` / LLM-provider imports. The Hermes plugin
-`witt3rd/hermes-zk-memory` is a thin `MemoryProvider` adapter over it.
+`witt3rd/hermes-zk-memory` is a thin `MemoryProvider` adapter over it, pinned to `@v0.1.0`.
 
 ## What changed
 
@@ -27,9 +26,8 @@ a zettelkasten memory with zero Hermes / `agent.*` / LLM-provider imports. The H
 
 ## Where I left off
 
-The plugin PR is open: `hermes-zk-memory` **#2** (`feat/wrap-zk-memory`), dependent on this repo.
-It must NOT be merged until the plugin suite is green against this sibling library — it is
-(currently **39** plugin tests + **59** here, both green).
+The plugin split (PR #2) is **merged**. `hermes-zk-memory` PR **#3** is open to pin its git dep to
+this repo's `@v0.1.0` tag. No open work here; this repo is complete for the split.
 
 ## Gotchas
 
@@ -42,9 +40,10 @@ It must NOT be merged until the plugin suite is green against this sibling libra
   install a fake `zk_memory.fts` in `sys.modules` whose `run_fts` raises `ImportError`.
 - **CLI** works against a real corpus; `linlink` (on PATH) mints uuids. `read`/`merge` take the
   canonical ref: uuid, or full filename stem (`20260817-hello`), not the bare slug.
+- **Tag hygiene** — `v0.1.0` is an annotated tag on the mainline tip. Future release bumps should
+  tag + push the tag separately from the commit.
 
 ## Next
 
-1. Merge plugin PR #2 once CI/maintainer confirms green against this repo.
-2. Optional: tag `v0.1.0` and pin `hermes-zk-memory`'s git dep to it (matches `hermes-prospecta`).
-3. Optional later (explicitly out of scope for the split): CLI `retain` (needs an `--llm`), PyPI publish.
+1. Merge plugin PR #3 (pin to `@v0.1.0`); nothing needed in this repo to support it.
+2. Optional later (explicitly out of scope for the split): CLI `retain` (needs an `--llm`), PyPI publish.
