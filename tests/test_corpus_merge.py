@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import threading
+from pathlib import Path
 
 
 def test_merge_appends_fragment_with_date(zk_module, zk_root, monkeypatch):
@@ -89,3 +90,35 @@ def test_merge_serializes_concurrent_writers(zk_module, zk_root, monkeypatch):
     for i in range(20):
         assert f"a-{i}" in text
         assert f"b-{i}" in text
+
+
+# ---------------------------------------------------------------------------
+# source attribution (shared/multi-host corpora)
+# ---------------------------------------------------------------------------
+
+
+def test_merge_with_source_appends_attribution(zk_module, zk_root, monkeypatch):
+    write_result = zk_module.write("judy", "Judy", "Judy is a colleague.", zk_root)
+    result = zk_module.merge(
+        write_result["uuid"], "Arriving in two weeks.", zk_root, source="roger"
+    )
+    assert result["ok"] is True
+    text = Path(result["path"]).read_text()
+    assert "(roger):" in text
+    assert "Arriving in two weeks." in text
+
+
+def test_merge_source_env_default(zk_module, zk_root, monkeypatch):
+    monkeypatch.setenv("ZK_MEMORY_SOURCE", "chef")
+    write_result = zk_module.write("judy", "Judy", "Judy is a colleague.", zk_root)
+    zk_module.merge(write_result["uuid"], "A new fact.", zk_root)
+    text = Path(write_result["path"]).read_text()
+    assert "(chef):" in text
+
+
+def test_merge_no_source_is_unattributed(zk_module, zk_root, monkeypatch):
+    write_result = zk_module.write("judy", "Judy", "Judy is a colleague.", zk_root)
+    zk_module.merge(write_result["uuid"], "A plain fact.", zk_root)
+    text = Path(write_result["path"]).read_text()
+    assert "A plain fact." in text
+    assert "(" not in text.rsplit("A plain fact.", 1)[1]  # no attribution before the fact

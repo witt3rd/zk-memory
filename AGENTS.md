@@ -115,9 +115,19 @@ compaction batch):
 - **Diagnostics.** `probe.trace(event, root, **fields)` logs at INFO and
   appends one JSONL line to `<root-parent>/.zk-memory-trace.jsonl`. Never
   raises; a trace failure must never break the retain it describes.
+- **Shared / multi-host corpora** (e.g. a NAS every agent reads and writes).
+  Use the `rg` search backend (`Memory(backend="rg")`, `search(..., backend="rg")`,
+  or env `ZK_MEMORY_BACKEND=rg`) — the LanceDB index is single-writer and unsafe
+  to share. Writes are collision-safe and merges are append-only, so concurrent
+  writers degrade gracefully; `flock` is best-effort only across hosts (the
+  O_APPEND append is the real atomicity). Pass `source=` (host/agent name, or
+  env `ZK_MEMORY_SOURCE`) to `write`/`merge`/`retain_*` for attribution. Give
+  `tend`/`check`/`repair`/`mint` to **one** caretaker host, never concurrent
+  across hosts.
 - **Tests.** `pytest` in the repo root. Judge tests use `StructuredLLM`
   stubs — never fake OpenAI clients. To force search down the `rg` fallback,
-  install a fake `zk_memory.fts` whose `run_fts` raises `ImportError`.
+  install a fake `zk_memory.fts` whose `run_fts` raises `ImportError`, or
+  pass `backend="rg"`.
 
 ## House rules
 

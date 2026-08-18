@@ -235,3 +235,56 @@ def test_memory_exposes_corpus_ops(root):
     assert m.read(w["uuid"])["found"] is True
     # search works without an llm (never raises)
     assert isinstance(m.search("hello", limit=8), list)
+
+
+# ---------------------------------------------------------------------------
+# backend + source threading (shared/multi-host corpora)
+# ---------------------------------------------------------------------------
+
+
+def test_memory_backend_default_and_rg(root, monkeypatch):
+    root.mkdir(parents=True)
+    m = MemoryCls(root=root)
+    assert m.backend == "auto"
+    m2 = MemoryCls(root=root, backend="rg")
+    assert m2.backend == "rg"
+    calls = []
+    monkeypatch.setattr(corpus, "_search_rg", lambda root, query, limit: calls.append(1) or [])
+    m2.search("x")
+    assert calls == [1]  # backend="rg" never touched lancedb
+
+
+def test_memory_search_backend_override(root, monkeypatch):
+    root.mkdir(parents=True)
+    import zk_memory.corpus as corpus_mod
+    calls = []
+    monkeypatch.setattr(corpus_mod, "_search_rg", lambda root, query, limit: calls.append(1) or [])
+    m = MemoryCls(root=root, backend="auto")
+    m.search("x", backend="rg")  # per-call overrides the instance default
+    assert calls == [1]
+
+
+def test_memory_source_default_stamps_notes(root):
+    m = MemoryCls(root=root, source="roger")
+    w = m.write("authored", "Authored", "Body.")
+    assert "author: roger" in Path(w["path"]).read_text()
+
+
+def test_memory_retain_turn_stamps_source(root, monkeypatch):
+    monkeypatch.setattr(corpus, "search", lambda q, root, **kw: [])
+    stub = _ScriptedLLM([{"worth_retaining": True, "candidates": [CONCEPT]}])
+    m = MemoryCls(root=root, llm=stub, source="roger")
+    labels = m.retain_turn("u", "a")
+    assert labels == ["Atomic Notes"]
+    files = [f for f in _md_files(root) if "atomic-notes" in f.name]
+    assert files and "author: roger" in files[0].read_text()
+
+
+def test_memory_retain_turn_source_env_default(root, monkeypatch):
+    monkeypatch.setattr(corpus, "search", lambda q, root, **kw: [])
+    monkeypatch.setenv("ZK_MEMORY_SOURCE", "chef")
+    stub = _ScriptedLLM([{"worth_retaining": True, "candidates": [CONCEPT]}])
+    m = MemoryCls(root=root, llm=stub)
+    m.retain_turn("u", "a")
+    files = [f for f in _md_files(root) if "atomic-notes" in f.name]
+    assert files and "author: chef" in files[0].read_text()
