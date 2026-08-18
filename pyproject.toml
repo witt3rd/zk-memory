@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zk-memory"
+version = "0.1.0"
+description = "Host-agnostic zettelkasten memory library — atomic notes, LLM-judged retain, full-text recall."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Donald Thompson", email = "donald@witt3rd.com" }]
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+# Rich full-text recall. Official PyPI `lancedb` (not a fork). Optional:
+# search degrades to a `rg`-based fallback when this extra isn't installed.
+lancedb = ["lancedb>=0.15", "pyarrow>=14"]
+test = ["pytest>=7"]
+
+[project.scripts]
+zk-memory = "zk_memory.cli.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["zk_memory"]

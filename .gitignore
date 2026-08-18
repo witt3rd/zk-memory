@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+.env
+.env.local
+
+# zettelkasten corpus / index / diagnostic trace — user data, not committed
+zk/
+.zk-index/
+.zk-memory-trace.jsonl
+
+# IDE
+.idea/
+.vscode/
+*.sw[po]
+*~
+
+# OS
+.DS_Store
+Thumbs.db

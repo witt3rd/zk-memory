@@ -1,0 +1,140 @@
+# zk-memory
+
+**A host-agnostic zettelkasten memory library.** A flat corpus of atomic
+Markdown notes — one thought per note, own words, plain-markdown links, YAML
+frontmatter with a uuid. Judgment happens at **write time**: an injected LLM
+decides whether a turn is worth a note and drafts it; recall is full-text
+search. No Hermes / `agent.*` import anywhere in the package.
+
+The Hermes plugin `hermes-zk-memory` is one thin adapter over this library
+(a `MemoryProvider` that wires an injected `StructuredLLM` to Hermes'
+auxiliary-task forced-tool-call machinery). This repo is the standalone
+library the plugin wraps.
+
+## Goals
+
+- **Host-agnostic core.** `zk_memory` has zero knowledge of Hermes, `agent.*`,
+  or any LLM provider. It is embeddable by a plugin, a notebook, a script,
+  another agent.
+- **Write-time judgment.** The LLM decides, per turn, whether anything is
+  worth retaining and drafts it — not a raw transcript log, not
+  recall-time-ranking of everything.
+- **Append-only, collision-safe writes.** `merge` appends a dated fragment
+  under a corpus-wide flock; `write` refuses to overwrite. A bad merge can at
+  worst add a wrong fragment, never destroy content.
+- **One code path for volitional and automatic recall.** The same corpus
+  operations back both the tool surface and the `retain_*` motions.
+
+## Merits
+
+The thing worth protecting:
+
+- **Atomic notes over transcripts.** One thought per note means the corpus
+  stays navigable and linkable, and merge decisions stay local.
+- **The concept / entity_update split.** `entity_update` is a temporal or
+  attribute-level fact that would be a useless orphan as its own note — it
+  belongs appended to an existing entity note. Conflating the two kinds ruins
+  the corpus.
+- **Merge only into the same entity, prefer create.** A wrong merge pollutes
+  an existing note; a missed merge is just slight duplication — the safer
+  failure. A `merge_target_ref` not among the fetched hits is never trusted.
+- **`rg` fallback.** Search never hard-fails without lancedb.
+
+## Layout
+
+```
+zk_memory/
+  __init__.py     # exports Memory + module-level corpus functions
+  memory.py       # Memory(root, llm=None, tracer=None) — the embeddable object
+  corpus.py       # list/search/read/write/merge/tend (all take an explicit root)
+  fts.py          # LanceDB FTS backend (optional; search falls back to rg)
+  retain.py       # retain_turn / retain_messages / process_candidate
+  judge.py        # StructuredLLM protocol + distill/merge prompts & schemas
+  probe.py        # trace(event, root, **fields) -> .zk-memory-trace.jsonl
+  cli/            # thin CLI: search / read / write / merge / tend / list
+tests/            # corpus ops, probe, judge (StructuredLLM stubs), retain
+```
+
+## Concepts
+
+### Two entry points
+
+Module-level functions take an explicit `root` — for embedders that just want
+files:
+
+```python
+from zk_memory import search, read, write, merge, tend, list_notes
+search("judy", root)
+```
+
+`Memory` binds a root (and optionally an LLM and a tracer):
+
+```python
+from zk_memory import Memory
+m = Memory(root=Path("./zk"), llm=my_llm)   # llm optional
+m.search("judy", limit=8)
+m.retain_turn(user, assistant)              # distill -> merge|create
+m.retain_messages(messages)                 # same pipeline over a batch
+```
+
+No LLM → `retain_*` returns empty / no-ops; corpus ops still work.
+
+### LLM as an injected callable (P3)
+
+The library never imports `openai` / `anthropic` / `litellm` /
+`agent.auxiliary_client`. `judge.StructuredLLM` is the contract:
+
+```python
+class StructuredLLM(Protocol):
+    def __call__(self, messages: list[dict[str, str]], *,
+                  schema: dict, name: str) -> dict | None: ...
+```
+
+`judge.py` owns the prompts, JSON schemas, and orchestration; it calls
+`llm(messages, schema=..., name=...)`. The Hermes adapter implements this
+with the auxiliary-task forced-tool-call path (so live retain behavior is
+unchanged); a notebook implements it with whatever JSON mode it has.
+
+### The retain pipeline
+
+`retain_turn(user, assistant)` (and `retain_messages(messages)` for a
+compaction batch):
+
+1. **Distill** — one call, sees only the transcript, zero corpus visibility.
+   Splits it into candidates tagged `concept` or `entity_update`.
+2. **Per candidate** — `search` its topic (no LLM). No hits → straight to
+   create. Hits → fetch full bodies and make **one** comparison call across
+   all of them (`judge_merge`) deciding merge-into-existing vs. create.
+3. **Write** — `merge` (append-only) or `write` (new note).
+
+## Mechanisms
+
+- **Corpus discipline.** Flat `YYYYMMDD-slug.md`; uuid minted via `linlink`
+  (never hand-written), with an own-uuid fallback when linlink is absent.
+  Plain-markdown links `[label](slug.md)`.
+- **Diagnostics.** `probe.trace(event, root, **fields)` logs at INFO and
+  appends one JSONL line to `<root-parent>/.zk-memory-trace.jsonl`. Never
+  raises; a trace failure must never break the retain it describes.
+- **Tests.** `pytest` in the repo root. Judge tests use `StructuredLLM`
+  stubs — never fake OpenAI clients. To force search down the `rg` fallback,
+  install a fake `zk_memory.fts` whose `run_fts` raises `ImportError`.
+
+## House rules
+
+- **House git.** Primary clone stays on `main` and is never checked out to a
+  feature branch. Work happens in per-branch linked worktrees under
+  `zk-memory.wt/<branch>/`, mechanized by `git wt-new` / `git wt-rm`. This
+  repo has no prior mainline — the first commit *is* main.
+- **AGENTS.md is the single source of truth.** `README.md` is a symlink to
+  this file for GitHub; there is no separate human doc to keep in sync.
+- **Reversible-first.** Prefer changes that are easy to revert; never leave
+  the repo worse than you found it.
+
+## Relationship to hermes-zk-memory
+
+`hermes-zk-memory` (a separate repo, also in `witt3rd`) is the Hermes
+`MemoryProvider` wrapper. Its `__init__.py` constructs `Memory` with an
+adapter LLM, owns the tool text formatting / threading / config / auxiliary
+task registration, and delegates every substantive op to this library. If
+you find yourself reimplementing merge-or-create in the plugin, push it down
+here instead (P9).
