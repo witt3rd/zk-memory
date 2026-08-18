@@ -12,6 +12,7 @@ plain ``zk_memory.corpus`` functions; diagnostics go to an injected
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from zk_memory import corpus
@@ -215,6 +216,10 @@ def process_candidate(
                 action="create_failed", slug=slug, ok=False, err=result.get("err"),
             )
             return None
+        # Stamp the kind so the note is self-describing — the tend pass
+        # reads it to honor "decisions never merge" (append-only history).
+        if kind:
+            corpus._ensure_field(Path(result["path"]), "kind", kind)
         tracer(
             "candidate_decision", root, kind=kind, topic=topic,
             action="create", slug=slug, ok=result.get("ok"), err=result.get("err"),

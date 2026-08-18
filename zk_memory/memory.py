@@ -16,6 +16,7 @@ from zk_memory import corpus
 from zk_memory import probe
 from zk_memory.judge import StructuredLLM
 from zk_memory.retain import retain_messages, retain_turn
+from zk_memory.tend import tend_writes as _tend_writes
 
 logger = logging.getLogger(__name__)
 
@@ -142,4 +143,24 @@ class Memory:
         return retain_messages(
             self._root, self._llm, self._tracer, messages, session_id=session_id,
             source=source,
+        )
+
+    def tend_writes(
+        self,
+        *,
+        limit: int = 20,
+        source: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        """The content gardener pass: reconcile the most recent writes
+        against the corpus (delayed integration of the cheap write path).
+
+        Recent writes are the highest-priority candidates. Each is merged
+        (append-only fold into an existing note + retired to .archive/),
+        linked (out-links to related notes), or kept. ``decision`` notes
+        never merge. No-op (returns []) without an ``llm``. Returns a list
+        of ``{ref, slug, action, target?, links?}`` per candidate."""
+        if source is None:
+            source = self._source
+        return _tend_writes(
+            self._root, self._llm, self._tracer, limit=limit, source=source,
         )
