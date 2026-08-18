@@ -110,6 +110,16 @@ compaction batch):
    all of them (`judge_merge`) deciding merge-into-existing vs. create.
    Decisions skip this step entirely (never merge) and always become a
    standalone dated zettel.
+
+The **write path is deliberately cheap** (arbitrary writes, mechanical
+safety only). Quality is bought later by the gardener pass:
+`Memory.tend_writes()` walks the most recent writes (by mtime) as the
+highest-priority candidates and reconciles each — merges a duplicate into
+an existing note (append-only fold) and retires it to `.archive/`
+(reversible, never deleted), or appends `[label](slug.md)` out-links so
+the graph grows. `decision` notes never merge. This is distinct from
+`tend` (linlink structure hygiene: repair/check/mint). Capture fast,
+integrate later; recency is the priority.
 3. **Write** — `merge` (append-only) or `write` (new note).
 
 ## Mechanisms

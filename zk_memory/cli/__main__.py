@@ -90,6 +90,26 @@ def _cmd_tend(args) -> int:
     return 0 if result.get("ok") else 1
 
 
+def _cmd_tend_writes(args) -> int:
+    from zk_memory import Memory
+    root = _resolve_root(args)
+    m = Memory(root=root)
+    results = m.tend_writes(limit=args.limit)
+    if not results:
+        print("tend-writes: no-op (the CLI has no LLM; a gardener agent drives "
+              "`Memory.tend_writes(llm=...)` with its own StructuredLLM)")
+        return 0
+    for r in results:
+        action = r.get("action")
+        if action == "merged":
+            print(f"- {r.get('slug')}: MERGED into {r.get('target')}")
+        elif action == "linked":
+            print(f"- {r.get('slug')}: linked -> {len(r.get('links', []))} note(s)")
+        else:
+            print(f"- {r.get('slug')}: {action}")
+    return 0
+
+
 def _cmd_list(args) -> int:
     root = _resolve_root(args)
     notes = list_notes(root)
@@ -129,6 +149,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("tend", help="Run a linlink maintenance action (repair/check/mint).")
     p.add_argument("action")
     p.set_defaults(func=_cmd_tend)
+
+    p = sub.add_parser("tend-writes", help="Gardener pass: reconcile recent writes (merge/link). Requires an LLM (no-op in the CLI).")
+    p.add_argument("--limit", type=int, default=20)
+    p.set_defaults(func=_cmd_tend_writes)
 
     p = sub.add_parser("list", help="List every note in the corpus.")
     p.set_defaults(func=_cmd_list)

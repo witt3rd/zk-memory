@@ -81,6 +81,26 @@ A corpus can live on a shared volume (a NAS) that every host/agent reads and wri
 
 **Prevents:** a shared-memory deployment silently corrupting its index or content; "whose note is this" being unanswerable; two hosts racing `linlink repair`.
 
+## Z10 — Capture fast, integrate later; recency is the priority
+
+The write path is deliberately cheap — arbitrary writes with mechanical safety only (slug
+sanitize, no-overwrite, linlink mint). Volitional writes are **not** taxed with a pre-flight
+judgment at write time. Quality is bought later by the **gardener pass** (`Memory.tend_writes`),
+which treats the most recent writes (by mtime) as the highest-priority candidates and
+reconciles each against the corpus:
+
+- **merge** — the note folds into an existing one (append-only dated fragment) and the
+  duplicate retires to `.archive/`, **reversible, never deleted**.
+- **link** — kept notes gain `[label](slug.md)` out-links to related notes, growing the graph.
+- `decision` notes never merge (append-only history; a new decision on a topic is a new note).
+
+Distinct from `tend` (linlink structure hygiene). The gardener is a single-caretaker job on a
+shared corpus (Z9).
+
+**Prevents:** write-time friction that discourages capture; duplicates and orphans accumulating
+forever with no reconciliation; a "gardening" story that only fixes links/uuids and never
+repairs content quality.
+
 ---
 
 *Authored 2026-08-17 as part of the split from hermes-zk-memory into a host-agnostic library plus thin Hermes adapter (same shape as the prospecta / hermes-prospecta split).*

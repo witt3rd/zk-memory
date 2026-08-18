@@ -33,10 +33,10 @@ from typing import Any, Optional
 # ---------------------------------------------------------------------------
 
 def list_notes(root: Path) -> list[dict[str, Any]]:
-    """Return every note as {uuid, title, slug, path, date}.
+    """Return every note as {uuid, title, slug, path, date, kind}.
 
     Flat tree of Markdown files with optional YAML frontmatter (uuid/title/
-    date). Survives notes without frontmatter.
+    date/kind). Survives notes without frontmatter.
     """
     notes: list[dict[str, Any]] = []
     if not root.is_dir():
@@ -56,6 +56,7 @@ def list_notes(root: Path) -> list[dict[str, Any]]:
             "uuid": fm.get("uuid", ""),
             "title": fm.get("title", f.stem),
             "date": fm.get("date", ""),
+            "kind": fm.get("kind", ""),
             "slug": f.stem,
             "path": f.name,
             "body": body,
@@ -137,7 +138,7 @@ def _search_rg(root: Path, query: str, limit: int) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def read_note_meta(path: Path) -> Optional[dict[str, Any]]:
-    """Read a note's {uuid,title,slug,path,date} from a path on disk."""
+    """Read a note's {uuid,title,slug,path,date,kind} from a path on disk."""
     slug = path.stem
     raw = path.read_text(encoding="utf-8", errors="replace")
     fm: dict[str, str] = {}
@@ -153,6 +154,7 @@ def read_note_meta(path: Path) -> Optional[dict[str, Any]]:
         "slug": slug,
         "path": path.name,
         "date": fm.get("date", ""),
+        "kind": fm.get("kind", ""),
     }
 
 
@@ -206,22 +208,51 @@ def _resolve_source(source: Optional[str]) -> Optional[str]:
     return os.environ.get("ZK_MEMORY_SOURCE") or None
 
 
-def _ensure_author(path: Path, source: str) -> None:
-    """Insert ``author: <source>`` into a note's YAML frontmatter if absent.
+def _ensure_field(path: Path, key: str, value: str) -> bool:
+    """Insert ``key: value`` into a note's YAML frontmatter if absent.
 
     Best-effort: only acts when the file already has a frontmatter block
-    (linlink mint / the own-uuid fallback both produce one) and no
-    ``author:`` line yet. Never rewrites body content.
+    (linlink mint / the own-uuid fallback both produce one) and the key is
+    not already present. Never rewrites body content. Returns True if the
+    field was added.
     """
     raw = path.read_text(encoding="utf-8", errors="replace")
     m = re.match(r"^(---\n)(.*?)(\n---\n)", raw, re.S)
     if not m:
-        return
+        return False
     head, fm, tail = m.group(1), m.group(2), m.group(3)
-    if re.search(r"^author\s*:", fm, re.M):
-        return
-    fm = fm.rstrip("\n") + f"\nauthor: {source}"
+    if re.search(rf"^{re.escape(key)}\s*:", fm, re.M):
+        return False
+    fm = fm.rstrip("\n") + f"\n{key}: {value}"
     path.write_text(head + fm + tail + raw[m.end():], encoding="utf-8")
+    return True
+
+
+def _ensure_author(path: Path, source: str) -> bool:
+    """Insert ``author: <source>`` into a note's frontmatter if absent."""
+    return _ensure_field(path, "author", source)
+
+
+def add_related_links(path: Path, links: list[tuple[str, str]]) -> list[str]:
+    """Append a ``## Related`` section of ``[label](slug.md)`` links.
+
+    Append-only: never touches existing prose. Skips links already present
+    in the note. Returns the list of slugs actually added.
+    """
+    if not links:
+        return []
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    existing = set(re.findall(r"\]\(([^)]+?\.md)\)", raw))
+    to_add = [(label, f"{slug}.md") for (label, slug) in links
+              if f"{slug}.md" not in existing]
+    if not to_add:
+        return []
+    lines = ["\n\n## Related", ""]
+    for label, target in to_add:
+        lines.append(f"- [{label}]({target})")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return [t.removesuffix(".md") for (_, t) in to_add]
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +318,12 @@ def write(
         uuid = str(_uuid.uuid4())
         front = f"---\nuuid: {uuid}\ntitle: {title}\ndate: {_dt.date.today().isoformat()}\n---\n\n"
         fpath.write_text(front + content_txt, encoding="utf-8")
+    # linlink mint rewrites frontmatter to just `uuid:` — re-ensure the
+    # title/date (idempotent: no-op where the own-uuid fallback already
+    # wrote them), so a note's title survives for recall/display and the
+    # tend pass can search by it.
+    _ensure_field(fpath, "title", title)
+    _ensure_field(fpath, "date", _dt.date.today().isoformat())
     if source:
         _ensure_author(fpath, source)
 
