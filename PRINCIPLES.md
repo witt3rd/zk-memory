@@ -70,6 +70,17 @@ Library API is locked by tests, not docstrings. Corpus ops have direct tests aga
 
 **Prevents:** API drift; "we changed the return shape and forgot to update three callers"; confident-sounding docs that don't match code.
 
+## Z9 — Shared corpora are a first-class mode
+
+A corpus can live on a shared volume (a NAS) that every host/agent reads and writes. The design must keep that safe without a central server:
+
+- **Search uses the `rg` backend on a shared root** (`backend="rg"` / `ZK_MEMORY_BACKEND`). LanceDB is single-writer; a shared mutable index corrupts under concurrent hosts and goes stale. `rg` is stateless and reads live files.
+- **Writes are collision-safe; merges are append-only O_APPEND.** Concurrent writers degrade to "a note already exists" or an interleaved fragment — never corruption. `flock` is best-effort only across hosts (NFS `local_lock=none`); the append atomicity is the real guarantee.
+- **Attribution is optional but on by default for the caller** — `source=` (host/agent name, or `ZK_MEMORY_SOURCE`) lands in the note's frontmatter / append line, so a collective memory stays answerable ("who wrote this").
+- **Maintenance is single-owner.** `tend`/`check`/`repair`/`mint` rewrite files; one caretaker host owns them, the rest only search/read/write/merge.
+
+**Prevents:** a shared-memory deployment silently corrupting its index or content; "whose note is this" being unanswerable; two hosts racing `linlink repair`.
+
 ---
 
 *Authored 2026-08-17 as part of the split from hermes-zk-memory into a host-agnostic library plus thin Hermes adapter (same shape as the prospecta / hermes-prospecta split).*

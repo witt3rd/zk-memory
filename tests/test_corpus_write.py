@@ -84,3 +84,31 @@ def test_write_with_linlink_present_but_produces_no_uuid_line(zk_module, zk_root
 
     assert result["ok"] is True
     assert result.get("uuid")  # fell back to its own uuid since no uuid: line was written
+
+
+# ---------------------------------------------------------------------------
+# source attribution (shared/multi-host corpora)
+# ---------------------------------------------------------------------------
+
+
+def test_write_with_source_records_author_in_frontmatter(zk_module, zk_root, monkeypatch):
+    result = zk_module.write("authored", "Authored", "Body.", zk_root, source="roger")
+    assert result["ok"]
+    text = Path(result["path"]).read_text()
+    assert "author: roger" in text
+    # body/title untouched
+    assert "# Authored" in text
+    assert "Body." in text
+
+
+def test_write_source_env_default(zk_module, zk_root, monkeypatch):
+    monkeypatch.setenv("ZK_MEMORY_SOURCE", "chef")
+    result = zk_module.write("env-auth", "Env", "Body.", zk_root)
+    assert result["ok"]
+    assert "author: chef" in Path(result["path"]).read_text()
+
+
+def test_write_no_source_has_no_author_line(zk_module, zk_root, monkeypatch):
+    result = zk_module.write("plain", "Plain", "Body.", zk_root)
+    assert result["ok"]
+    assert "author:" not in Path(result["path"]).read_text()

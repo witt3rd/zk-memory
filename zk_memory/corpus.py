@@ -73,22 +73,39 @@ def search(
     *,
     limit: int = 8,
     rebuild_index: bool = False,
+    backend: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Full-text search the corpus; returns ranked note hits.
 
-    Primary path: LanceDB FTS (lazy import; a rich ranked recall). Falls
-    back to ripgrep -l when lancedb is unavailable or no index exists
-    (ranked by term density) so recall never hard-fails.
+    ``backend`` selects the recall engine:
+
+      - "auto" (default) — try LanceDB FTS, fall back to ripgrep.
+      - "rg" — ripgrep only (skip the LanceDB attempt entirely). Use for
+        shared / multi-host corpora (e.g. a NAS) where a mutable index is
+        a concurrency hazard and recall must just read live files.
+      - "fts" — LanceDB FTS only; returns [] if it's unavailable.
+
+    Defaults to the ``ZK_MEMORY_BACKEND`` env var ("auto" if unset or
+    unrecognized) — a per-host deployment knob for a shared corpus.
+    Recall never hard-fails: "auto"/"rg" fall back to ripgrep when rg is
+    present.
     """
+    if backend is None:
+        backend = os.environ.get("ZK_MEMORY_BACKEND", "auto")
+    if backend not in ("auto", "rg", "fts"):
+        backend = "auto"
     if not root.is_dir():
         return []
 
+    if backend == "rg":
+        return _search_rg(root, query, limit)
     try:
         from zk_memory.fts import run_fts
         return run_fts(root, query, limit=limit, rebuild=rebuild_index)
     except ImportError:
-        pass
-    return _search_rg(root, query, limit)
+        if backend == "fts":
+            return []
+        return _search_rg(root, query, limit)
 
 
 def _search_rg(root: Path, query: str, limit: int) -> list[dict[str, Any]]:
@@ -182,15 +199,51 @@ def read(ref: str, root: Path, *, resolve_links: bool = True) -> dict[str, Any]:
     return {"found": True, "note": note, "links": links}
 
 
+def _resolve_source(source: Optional[str]) -> Optional[str]:
+    """Resolve an attribution source: explicit param, else $ZK_MEMORY_SOURCE."""
+    if source is not None:
+        return source
+    return os.environ.get("ZK_MEMORY_SOURCE") or None
+
+
+def _ensure_author(path: Path, source: str) -> None:
+    """Insert ``author: <source>`` into a note's YAML frontmatter if absent.
+
+    Best-effort: only acts when the file already has a frontmatter block
+    (linlink mint / the own-uuid fallback both produce one) and no
+    ``author:`` line yet. Never rewrites body content.
+    """
+    raw = path.read_text(encoding="utf-8", errors="replace")
+    m = re.match(r"^(---\n)(.*?)(\n---\n)", raw, re.S)
+    if not m:
+        return
+    head, fm, tail = m.group(1), m.group(2), m.group(3)
+    if re.search(r"^author\s*:", fm, re.M):
+        return
+    fm = fm.rstrip("\n") + f"\nauthor: {source}"
+    path.write_text(head + fm + tail + raw[m.end():], encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Write — author a new zettel
 # ---------------------------------------------------------------------------
 
-def write(slug: str, title: str, body: str, root: Path) -> dict[str, Any]:
+def write(
+    slug: str,
+    title: str,
+    body: str,
+    root: Path,
+    *,
+    source: Optional[str] = None,
+) -> dict[str, Any]:
     """Author a new atomic note into the corpus.
 
     Discipline: flat, YYYYMMDD-slug.md; uuid minted via linlink (never
     hand-written); plain-markdown links; one thought.
+
+    ``source`` (e.g. a host or agent name, for a shared corpus) is
+    recorded as an ``author:`` line in the frontmatter when given —
+    defaults to the ``ZK_MEMORY_SOURCE`` env var. Caller wins (P4).
 
     Writes the note WITHOUT uuid frontmatter, then runs ``linlink mint`` so
     the uuid is minted canonically. Returns {ok, path, uuid?, err}.
@@ -198,6 +251,7 @@ def write(slug: str, title: str, body: str, root: Path) -> dict[str, Any]:
     import datetime as _dt
 
     root.mkdir(parents=True, exist_ok=True)
+    source = _resolve_source(source)
 
     safe_slug = re.sub(r"[^a-z0-9-]", "-", slug.lower()).strip("-")
     if not safe_slug:
@@ -233,6 +287,8 @@ def write(slug: str, title: str, body: str, root: Path) -> dict[str, Any]:
         uuid = str(_uuid.uuid4())
         front = f"---\nuuid: {uuid}\ntitle: {title}\ndate: {_dt.date.today().isoformat()}\n---\n\n"
         fpath.write_text(front + content_txt, encoding="utf-8")
+    if source:
+        _ensure_author(fpath, source)
 
     return {"ok": True, "path": str(fpath), "uuid": uuid}
 
@@ -241,7 +297,13 @@ def write(slug: str, title: str, body: str, root: Path) -> dict[str, Any]:
 # Merge — append a fragment to an EXISTING note (never rewrite/replace)
 # ---------------------------------------------------------------------------
 
-def merge(ref: str, fragment: str, root: Path) -> dict[str, Any]:
+def merge(
+    ref: str,
+    fragment: str,
+    root: Path,
+    *,
+    source: Optional[str] = None,
+) -> dict[str, Any]:
     """Append a dated fragment to an existing note.
 
     This is the one true read-modify-write on the corpus, and the one
@@ -250,7 +312,14 @@ def merge(ref: str, fragment: str, root: Path) -> dict[str, Any]:
     needs to keep two concurrent callers (two sync_turn threads, or a
     volitional zk_write racing an automatic retain) from interleaving.
     A corpus-wide flock is coarser than a per-note lock but simpler and
-    plenty for this call frequency.
+    plenty for this call frequency. (On a shared/multi-host corpus the
+    flock is best-effort only — the append is opened with O_APPEND so
+    each write is atomic and worst-case fragments interleave, never
+    corrupt.)
+
+    ``source`` (e.g. a host or agent name, for a shared corpus) is
+    recorded in the appended line, ``*{date} ({source}):*`` — defaults to
+    the ``ZK_MEMORY_SOURCE`` env var. Caller wins (P4).
 
     Append-only by design: never rewrites existing prose, so a bad
     merge can at worst add a wrong fragment, never destroy content.
@@ -262,13 +331,15 @@ def merge(ref: str, fragment: str, root: Path) -> dict[str, Any]:
     if not note:
         return {"ok": False, "path": "", "err": f"note not found: {ref}"}
     fpath = root / note["path"]
+    source = _resolve_source(source)
 
     lock_path = root / ".zk.lock"
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         today = _dt.date.today().isoformat()
-        addition = f"\n\n---\n*{today}:* {fragment.strip()}\n"
+        attribution = f" ({source})" if source else ""
+        addition = f"\n\n---\n*{today}{attribution}:* {fragment.strip()}\n"
         try:
             with open(fpath, "a", encoding="utf-8") as f:
                 f.write(addition)

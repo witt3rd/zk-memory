@@ -31,6 +31,7 @@ def retain_turn(
     assistant_content: str,
     *,
     session_id: str = "",
+    source: Optional[str] = None,
 ) -> list[str]:
     """Distill one turn and process every candidate. Returns the list of
     retained labels (empty when nothing was retained). Never raises.
@@ -49,7 +50,7 @@ def retain_turn(
         )
         labels: list[str] = []
         for candidate in candidates:
-            label = process_candidate(root, candidate, llm, tracer)
+            label = process_candidate(root, candidate, llm, tracer, source=source)
             if label:
                 labels.append(label)
         return labels
@@ -66,6 +67,7 @@ def retain_messages(
     messages: list[dict[str, Any]],
     *,
     session_id: str = "",
+    source: Optional[str] = None,
 ) -> list[str]:
     """Distill a batch of messages (the shape hermes hands
     ``MemoryProvider.on_pre_compress`` — turns about to be dropped by
@@ -89,7 +91,7 @@ def retain_messages(
         candidates = distill_text("\n\n".join(lines), llm)
         labels: list[str] = []
         for candidate in candidates:
-            label = process_candidate(root, candidate, llm, tracer)
+            label = process_candidate(root, candidate, llm, tracer, source=source)
             if label:
                 labels.append(label)
         tracer(
@@ -110,13 +112,17 @@ def process_candidate(
     candidate: dict[str, Any],
     llm: StructuredLLM,
     tracer: Tracer,
+    *,
+    source: Optional[str] = None,
 ) -> Optional[str]:
     """Route one distilled candidate: merge into an existing note if the
     merge judge picks one of the search hits, otherwise create a new note.
 
-    Returns the retained label (title or topic) on success, else None.
-    Never raises — failures are logged and skipped so one bad candidate
-    doesn't drop the rest of the turn's candidates.
+    ``source`` (host/agent attribution) is passed through to
+    ``corpus.write`` / ``corpus.merge``. Returns the retained label (title
+    or topic) on success, else None. Never raises — failures are logged
+    and skipped so one bad candidate doesn't drop the rest of the turn's
+    candidates.
     """
     try:
         topic = (candidate.get("topic") or candidate.get("title") or "").strip()
@@ -155,7 +161,7 @@ def process_candidate(
                     action="merge_skipped_empty_content", target=target_ref,
                 )
                 return None
-            result = corpus.merge(target_ref, content, root)
+            result = corpus.merge(target_ref, content, root, source=source)
             if not result.get("ok"):
                 logger.warning("zk-memory: merge failed: %s", result.get("err"))
             tracer(
@@ -175,7 +181,7 @@ def process_candidate(
                 action="create_skipped_incomplete",
             )
             return None
-        result = corpus.write(slug, title, content, root)
+        result = corpus.write(slug, title, content, root, source=source)
         if not result.get("ok"):
             logger.warning("zk-memory: create failed: %s", result.get("err"))
         tracer(
