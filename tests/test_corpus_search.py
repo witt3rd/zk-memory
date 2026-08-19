@@ -91,10 +91,11 @@ def test_search_rg_absent_returns_empty_directly(zk_module, zk_root, monkeypatch
 
 def test_search_backend_rg_skips_lancedb(zk_module, zk_root, monkeypatch):
     """backend="rg" must never attempt the lancedb import path."""
-    import zk_memory.corpus as corpus
+    import zk_memory.indexing as indexing
     zk_root.mkdir(parents=True)
     calls = []
-    monkeypatch.setattr(corpus, "_search_rg", lambda root, query, limit: calls.append("rg") or [])
+    monkeypatch.setattr(indexing.RgProvider, "search",
+                        lambda self, root, query, **kw: calls.append("rg") or [])
     assert zk_module.search("x", zk_root, backend="rg") == []
     assert calls == ["rg"]
 
@@ -108,21 +109,23 @@ def test_search_backend_fts_returns_empty_when_unavailable(zk_module, zk_root, m
 
 
 def test_search_backend_env_rg_default(zk_module, zk_root, monkeypatch):
-    import zk_memory.corpus as corpus
+    import zk_memory.indexing as indexing
     zk_root.mkdir(parents=True)
     calls = []
     monkeypatch.setenv("ZK_MEMORY_BACKEND", "rg")
-    monkeypatch.setattr(corpus, "_search_rg", lambda root, query, limit: calls.append("rg") or [])
+    monkeypatch.setattr(indexing.RgProvider, "search",
+                        lambda self, root, query, **kw: calls.append("rg") or [])
     assert zk_module.search("x", zk_root) == []
     assert calls == ["rg"]
 
 
 def test_search_backend_unrecognized_falls_back_to_auto(zk_module, zk_root, monkeypatch):
     """An unrecognized backend degrades to "auto" (try fts, fall back rg)."""
-    import zk_memory.corpus as corpus
+    import zk_memory.indexing as indexing
     zk_root.mkdir(parents=True)
     calls = []
     # fts import is unavailable via the autouse fixture, so auto falls to rg.
-    monkeypatch.setattr(corpus, "_search_rg", lambda root, query, limit: calls.append("rg") or [])
+    monkeypatch.setattr(indexing.RgProvider, "search",
+                        lambda self, root, query, **kw: calls.append("rg") or [])
     assert zk_module.search("x", zk_root, backend="bogus") == []
     assert calls == ["rg"]

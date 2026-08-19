@@ -47,12 +47,13 @@ zk_memory/
   __init__.py     # exports Memory + module-level corpus functions
   memory.py       # Memory(root, llm=None, tracer=None) — the embeddable object
   corpus.py       # list/search/read/write/merge/tend (all take an explicit root)
-  fts.py          # LanceDB FTS backend (optional; search falls back to rg)
+  indexing.py     # IndexProvider protocol + Rg/LanceDB/Auto providers + registry
+  fts.py          # LanceDB FTS engine (optional; search falls back to rg)
   retain.py       # retain_turn / retain_messages / process_candidate
   judge.py        # StructuredLLM protocol + distill/merge prompts & schemas
   probe.py        # trace(event, root, **fields) -> .zk-memory-trace.jsonl
   cli/            # thin CLI: search / read / write / merge / tend / list
-tests/            # corpus ops, probe, judge (StructuredLLM stubs), retain
+tests/            # corpus ops, probe, judge (StructuredLLM stubs), retain, indexing
 ```
 
 ## Concepts
@@ -139,6 +140,18 @@ integrate later; recency is the priority.
   env `ZK_MEMORY_SOURCE`) to `write`/`merge`/`retain_*` for attribution. Give
   `tend`/`check`/`repair`/`mint` to **one** caretaker host, never concurrent
   across hosts.
+- **Recall is a pluggable engine** (`indexing.IndexProvider`). `corpus.search`
+  and `Memory` resolve it three ways, in precedence: an injected
+  `index=`/`Memory(index=...)` provider object (the DI seam — embedders bring
+  their own remote/vector/custom engine), a `backend=` name (built-ins `auto`
+  / `rg` / `fts`, or any `register_backend(name, provider)`-ed name), else the
+  `ZK_MEMORY_BACKEND` env var ("auto"). The chosen provider is threaded through
+  the whole recall path — `Memory.search`, `retain_*`, and `tend_writes` — so a
+  shared corpus configured for `rg` never silently touches lancedb during
+  retain/merge (a real bug before the abstraction). lancedb is a build-time
+  extra (`zk-memory[lancedb]`); "other" providers are necessarily caller-supplied
+  at runtime, hence the DI seam. Recall never hard-fails: `auto`/`rg` fall back
+  to ripgrep, `fts`-only returns [] when lancedb is absent.
 - **Tests.** `pytest` in the repo root. Judge tests use `StructuredLLM`
   stubs — never fake OpenAI clients. To force search down the `rg` fallback,
   install a fake `zk_memory.fts` whose `run_fts` raises `ImportError`, or

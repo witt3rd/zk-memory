@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 from zk_memory import corpus
 from zk_memory import probe
+from zk_memory.indexing import IndexProvider, get_provider
 from zk_memory.judge import StructuredLLM
 from zk_memory.retain import retain_messages, retain_turn
 from zk_memory.tend import tend_writes as _tend_writes
@@ -30,8 +31,12 @@ class Memory:
             pipeline. None disables retain (corpus ops still work).
         tracer: an optional ``callable(event, root, **fields)`` diagnostic
             tracer. Defaults to ``zk_memory.probe.trace``.
-        backend: default search backend — "auto" | "rg" | "fts". "rg"
-            suits a shared/multi-host corpus (stateless, live reads).
+        backend: default search backend — "auto" | "rg" | "fts" (or any
+            ``register_backend``-ed name). "rg" suits a shared/multi-host
+            corpus (stateless, live reads).
+        index: an ``IndexProvider`` object. Takes precedence over
+            ``backend`` — the DI seam for a custom recall engine. Ignored
+            when a per-call ``backend``/``index`` is passed to ``search``.
         source: default attribution (host/agent name) stamped into notes
             this Memory writes/merges unless overridden per call.
     """
@@ -43,12 +48,14 @@ class Memory:
         tracer: Any = None,
         *,
         backend: str = "auto",
+        index: Any = None,
         source: Optional[str] = None,
     ) -> None:
         self._root = Path(root)
         self._llm = llm
         self._tracer = tracer if tracer is not None else probe.trace
         self._backend = backend
+        self._index: IndexProvider = get_provider(index if index is not None else backend)
         self._source = source
 
     @property
@@ -62,6 +69,10 @@ class Memory:
     @property
     def backend(self) -> str:
         return self._backend
+
+    @property
+    def index(self) -> IndexProvider:
+        return self._index
 
     @property
     def source(self) -> Optional[str]:
@@ -81,10 +92,16 @@ class Memory:
         limit: int = 8,
         rebuild_index: bool = False,
         backend: Optional[str] = None,
+        index: Any = None,
     ) -> list[dict[str, Any]]:
-        backend = backend if backend is not None else self._backend
+        if index is not None:
+            provider = index
+        elif backend is not None:
+            provider = get_provider(backend)
+        else:
+            provider = self._index
         return corpus.search(
-            query, self._root, limit=limit, rebuild_index=rebuild_index, backend=backend
+            query, self._root, limit=limit, rebuild_index=rebuild_index, index=provider
         )
 
     def read(self, ref: str, *, resolve_links: bool = True) -> dict[str, Any]:
@@ -127,6 +144,7 @@ class Memory:
         return retain_turn(
             self._root, self._llm, self._tracer,
             user_content, assistant_content, session_id=session_id, source=source,
+            index=self._index,
         )
 
     def retain_messages(
@@ -142,7 +160,7 @@ class Memory:
             source = self._source
         return retain_messages(
             self._root, self._llm, self._tracer, messages, session_id=session_id,
-            source=source,
+            source=source, index=self._index,
         )
 
     def tend_writes(
@@ -163,4 +181,5 @@ class Memory:
             source = self._source
         return _tend_writes(
             self._root, self._llm, self._tracer, limit=limit, source=source,
+            index=self._index,
         )

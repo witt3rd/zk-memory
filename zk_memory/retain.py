@@ -33,9 +33,13 @@ def retain_turn(
     *,
     session_id: str = "",
     source: Optional[str] = None,
+    index: Any = None,
 ) -> list[str]:
     """Distill one turn and process every candidate. Returns the list of
     retained labels (empty when nothing was retained). Never raises.
+
+    ``index`` is the recall ``IndexProvider`` used for the merge-vs-create
+    search (None -> the provider resolved by :func:`corpus.search`).
     """
     if llm is None:
         return []
@@ -51,7 +55,7 @@ def retain_turn(
         )
         labels: list[str] = []
         for candidate in candidates:
-            label = process_candidate(root, candidate, llm, tracer, source=source)
+            label = process_candidate(root, candidate, llm, tracer, source=source, index=index)
             if label:
                 labels.append(label)
         return labels
@@ -69,11 +73,15 @@ def retain_messages(
     *,
     session_id: str = "",
     source: Optional[str] = None,
+    index: Any = None,
 ) -> list[str]:
     """Distill a batch of messages (the shape hermes hands
     ``MemoryProvider.on_pre_compress`` — turns about to be dropped by
     context compaction) and process every candidate. Returns the list of
     retained labels. System messages are skipped. Never raises.
+
+    ``index`` is the recall ``IndexProvider`` used for the merge-vs-create
+    search (None -> the provider resolved by :func:`corpus.search`).
     """
     if llm is None or not messages:
         return []
@@ -92,7 +100,7 @@ def retain_messages(
         candidates = distill_text("\n\n".join(lines), llm)
         labels: list[str] = []
         for candidate in candidates:
-            label = process_candidate(root, candidate, llm, tracer, source=source)
+            label = process_candidate(root, candidate, llm, tracer, source=source, index=index)
             if label:
                 labels.append(label)
         tracer(
@@ -115,6 +123,7 @@ def process_candidate(
     tracer: Tracer,
     *,
     source: Optional[str] = None,
+    index: Any = None,
 ) -> Optional[str]:
     """Route one distilled candidate: merge into an existing note if the
     merge judge picks one of the search hits, otherwise create a new note.
@@ -138,7 +147,7 @@ def process_candidate(
 
         target_ref = None
         if not is_decision and topic:
-            hits = corpus.search(topic, root, limit=3)
+            hits = corpus.search(topic, root, limit=3, index=index)
             if hits:
                 notes = []
                 for h in hits:
