@@ -24,7 +24,7 @@ def _resolve_root(args) -> Path:
 
 def _cmd_search(args) -> int:
     root = _resolve_root(args)
-    hits = search(args.query, root, limit=args.limit)
+    hits = search(args.query, root, limit=args.limit, backend=args.backend)
     if not hits:
         print(f"no notes found for {args.query!r}")
         return 1
@@ -129,6 +129,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("search", help="Full-text search the corpus.")
     p.add_argument("query")
     p.add_argument("--limit", type=int, default=8)
+    p.add_argument("--backend", default=None,
+                   help="Recall engine: auto|rg|fts (or a registered name). "
+                        "Defaults to $ZK_MEMORY_BACKEND, else auto.")
     p.set_defaults(func=_cmd_search)
 
     p = sub.add_parser("read", help="Read one note by uuid / slug / path.")

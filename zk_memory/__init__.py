@@ -36,6 +36,14 @@ from zk_memory.corpus import (
     tend,
     write,
 )
+from zk_memory.indexing import (
+    AutoProvider,
+    IndexProvider,
+    LanceDBProvider,
+    RgProvider,
+    get_provider,
+    register_backend,
+)
 
 __all__ = [
     "Memory",
@@ -47,6 +55,13 @@ __all__ = [
     "search",
     "tend",
     "write",
+    # index-provider abstraction
+    "AutoProvider",
+    "IndexProvider",
+    "LanceDBProvider",
+    "RgProvider",
+    "get_provider",
+    "register_backend",
 ]
 
 __version__ = "0.4.0"

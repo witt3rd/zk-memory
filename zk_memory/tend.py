@@ -45,6 +45,7 @@ def tend_writes(
     limit: int = 20,
     source: Optional[str] = None,
     archive_dir: str = DEFAULT_ARCHIVE_DIR,
+    index: Any = None,
 ) -> list[dict[str, Any]]:
     """Reconcile the most recent writes against the corpus.
 
@@ -52,6 +53,9 @@ def tend_writes(
     it). Returns a list of ``{ref, slug, action, target?, links?}`` per
     candidate. No ``llm`` -> returns [] (no-op, same as retain without an
     LLM). Never raises.
+
+    ``index`` is the recall ``IndexProvider`` used for the related-notes
+    search (None -> the provider resolved by :func:`corpus.search`).
     """
     if llm is None:
         return []
@@ -63,7 +67,7 @@ def tend_writes(
     results: list[dict[str, Any]] = []
     for note in notes[:limit]:
         results.append(
-            _reconcile_note(root, note, llm, tracer, source=source, archive_dir=archive_dir)
+            _reconcile_note(root, note, llm, tracer, source=source, archive_dir=archive_dir, index=index)
         )
     return results
 
@@ -76,13 +80,14 @@ def _reconcile_note(
     *,
     source: Optional[str],
     archive_dir: str,
+    index: Any = None,
 ) -> dict[str, Any]:
     ref = note.get("uuid") or note.get("slug")
     slug = note.get("slug", "")
     kind = note.get("kind", "")
     topic = (note.get("title") or slug or "").strip()
     try:
-        hits = corpus.search(topic, root, limit=5) if topic else []
+        hits = corpus.search(topic, root, limit=5, index=index) if topic else []
         others = [
             h for h in hits
             if h.get("path") != note.get("path") and (h.get("uuid") or h.get("slug")) != ref

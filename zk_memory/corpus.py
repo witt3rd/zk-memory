@@ -27,6 +27,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
+from zk_memory.indexing import get_provider
+
 
 # ---------------------------------------------------------------------------
 # List — every note as {uuid, title, slug, path, date}
@@ -75,62 +77,42 @@ def search(
     limit: int = 8,
     rebuild_index: bool = False,
     backend: Optional[str] = None,
+    index: Any = None,
 ) -> list[dict[str, Any]]:
     """Full-text search the corpus; returns ranked note hits.
 
-    ``backend`` selects the recall engine:
+    The recall engine is a pluggable ``IndexProvider`` (see
+    ``zk_memory.indexing``). It is selected by ``backend`` or an injected
+    ``index``:
 
-      - "auto" (default) — try LanceDB FTS, fall back to ripgrep.
-      - "rg" — ripgrep only (skip the LanceDB attempt entirely). Use for
-        shared / multi-host corpora (e.g. a NAS) where a mutable index is
-        a concurrency hazard and recall must just read live files.
-      - "fts" — LanceDB FTS only; returns [] if it's unavailable.
+      - ``index`` — an ``IndexProvider`` object; takes precedence. This is
+        the DI seam: embedders bring their own engine (e.g. a remote or
+        vector provider).
+      - ``backend`` — a registered name: "auto" (default; try LanceDB FTS,
+        fall back to ripgrep), "rg" (ripgrep only — stateless live reads
+        for shared/multi-host corpora), "fts" (LanceDB FTS only; [] if
+        unavailable), or any ``register_backend``-ed name.
+      - neither — the ``ZK_MEMORY_BACKEND`` env var ("auto" if unset or
+        unrecognized) — a per-host deployment knob for a shared corpus.
 
-    Defaults to the ``ZK_MEMORY_BACKEND`` env var ("auto" if unset or
-    unrecognized) — a per-host deployment knob for a shared corpus.
     Recall never hard-fails: "auto"/"rg" fall back to ripgrep when rg is
-    present.
+    present; anything else degrades to [].
     """
-    if backend is None:
-        backend = os.environ.get("ZK_MEMORY_BACKEND", "auto")
-    if backend not in ("auto", "rg", "fts"):
-        backend = "auto"
     if not root.is_dir():
         return []
-
-    if backend == "rg":
-        return _search_rg(root, query, limit)
-    try:
-        from zk_memory.fts import run_fts
-        return run_fts(root, query, limit=limit, rebuild=rebuild_index)
-    except ImportError:
-        if backend == "fts":
-            return []
-        return _search_rg(root, query, limit)
+    provider = get_provider(index if index is not None else backend)
+    return provider.search(root, query, limit=limit, rebuild_index=rebuild_index)
 
 
 def _search_rg(root: Path, query: str, limit: int) -> list[dict[str, Any]]:
-    """Ripgrep fallback: -l files, ranked by hit count / query terms."""
-    rg = shutil.which("rg")
-    if not rg:
-        return []
-    try:
-        proc = subprocess.run(
-            [rg, "-l", "-i", "--", query, str(root)],
-            capture_output=True, text=True, timeout=15,
-        )
-    except (subprocess.TimeoutExpired, OSError):
-        return []
-    files = [Path(l) for l in proc.stdout.splitlines() if l]
-    hits: list[dict[str, Any]] = []
-    for f in files[:limit]:
-        note = read_note_meta(f)
-        if note:
-            body = (f.read_text(errors="replace") or "").lower()
-            note["score"] = body.count(query.lower())
-            hits.append(note)
-    hits.sort(key=lambda n: n.get("score", 0), reverse=True)
-    return hits
+    """Compat shim for the ripgrep recall engine.
+
+    Backed by ``indexing.RgProvider``. Kept (underscore) so callers that
+    referenced the old private helper keep working; new code should select
+    the engine via ``backend`` / ``index`` on :func:`search`.
+    """
+    from zk_memory.indexing import RgProvider
+    return RgProvider().search(root, query, limit=limit)
 
 
 # ---------------------------------------------------------------------------

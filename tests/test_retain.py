@@ -243,22 +243,25 @@ def test_memory_exposes_corpus_ops(root):
 
 
 def test_memory_backend_default_and_rg(root, monkeypatch):
+    import zk_memory.indexing as indexing
     root.mkdir(parents=True)
     m = MemoryCls(root=root)
     assert m.backend == "auto"
     m2 = MemoryCls(root=root, backend="rg")
     assert m2.backend == "rg"
     calls = []
-    monkeypatch.setattr(corpus, "_search_rg", lambda root, query, limit: calls.append(1) or [])
+    monkeypatch.setattr(indexing.RgProvider, "search",
+                        lambda self, root, query, **kw: calls.append(1) or [])
     m2.search("x")
     assert calls == [1]  # backend="rg" never touched lancedb
 
 
 def test_memory_search_backend_override(root, monkeypatch):
+    import zk_memory.indexing as indexing
     root.mkdir(parents=True)
-    import zk_memory.corpus as corpus_mod
     calls = []
-    monkeypatch.setattr(corpus_mod, "_search_rg", lambda root, query, limit: calls.append(1) or [])
+    monkeypatch.setattr(indexing.RgProvider, "search",
+                        lambda self, root, query, **kw: calls.append(1) or [])
     m = MemoryCls(root=root, backend="auto")
     m.search("x", backend="rg")  # per-call overrides the instance default
     assert calls == [1]
