@@ -163,3 +163,10 @@ adapter LLM, owns the tool text formatting / threading / config / auxiliary
 task registration, and delegates every substantive op to this library. If
 you find yourself reimplementing merge-or-create in the plugin, push it down
 here instead (P9).
+
+## Why not X?
+
+`WHY-NOT.md` answers "why don't you use mem0 / LangMem / Khoj / QMD / ...?"
+for this library, anchored to `PRINCIPLES.md`. **Maintenance rule:** add a
+line when a system is proposed; update when one materially changes. See
+`skills/why-not/` for the discipline.
