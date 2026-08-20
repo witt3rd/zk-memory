@@ -77,9 +77,10 @@ tests/          # pytest suite
 - **Worktrees only** (`git wt-new <branch>` under `zk-memory.wt/`); primary clone stays on `main`.
 - Version bumps are real: feature → minor, tag + push the tag separately (`git tag -a vX.Y.Z -m ...`),
   then the plugin repins (`@vX.Y.Z`). Land the library, tag, then repin the plugin.
-- **Caretaker loop**: orient via `.agent/HANDOFF.md` → verify `pytest` green → leave the repo at the
-  clean end-state (no stale worktrees, no leftover branches, main at origin tip). Write
-  `.agent/HANDOFF.md` on sleep.
+- **Caretaker loop**: orient via the signalling handoff (`scripts/agent state` / latest `H--`
+  event in `.agent/log/`) → verify `pytest` green → leave the repo at the clean end-state (no
+  stale worktrees, no leftover branches, main at origin tip). Write a handoff on sleep with
+  `scripts/agent handoff <subject>` — **not** a HANDOFF.md (that convention is retired).
 - Retire `examples/` demos stay runnable: `python examples/*_demo.py` from the venv.
 
 ## References
