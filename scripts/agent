@@ -1,0 +1,479 @@
+#!/usr/bin/env bash
+#
+# agent — the control plane for an agent-operated repository.
+#
+# A git repo becomes an *active intelligence* when its history is the ledger.
+# Every self-handoff and every inbound/outbound message is an atomic event file
+# committed to git. This script owns the ceremony so that a "bring your own
+# agent" workflow stays deterministic: events conform to a schema, the read
+# model (STATE.md) is always derived from the log, and `agent check` gates
+# integrity.
+#
+# The channel is the file, not the network. No daemon, no server, no special
+# git host. Works on any plain git repo. Just point an agent at it.
+#
+# Event log:   <repo>/.agent/log/            one file per event
+# Identity:   <repo>/.agent/config          or env AGENT_ID
+#
+# Event filename:  T--<ts>--<id>.md          T in {H,O,I,R,C}
+#   H  handoff     a self-snapshot at session end
+#   O  outbound    a message to another repo/agent
+#   I  inbound     a message from another repo/agent
+#   R  resolve     a marker that closes an O or I event
+#   C  claim       a marker that an O or I event is owned (blocks re-dispatch)
+#   S  state       a projection snapshot of the repo's current state
+#
+# Usage:
+#   agent init [identity]                    scaffold .agent/ + first STATE
+#   agent identity [name]                    get/set the agent identity
+#   agent handoff <subject> [-m BODY]        snapshot current state
+#   agent send <to> <subject> [--target P] [--thread T] [-m BODY]
+#                                            send a message; --target mirrors the
+#                                            inbound into a co-located repo
+#   agent reply <event-id> [subject] [--target P] [-m BODY]
+#   agent resolve <event-id> [reason] [--target REPO]   (propagates to the mirror)
+#   agent claim <event-id> [reason]    mark an event owned (blocks re-dispatch)
+#   agent inbox                              list open inbound
+#   agent outbox                             list open outbound
+#   agent state                              derive + print STATE.md
+#   agent log                                print the event history
+#   agent check                              integrity/conformity gate
+#   agent --help                             this help
+#
+# Exit codes: 0 clean · 2 non-conformant · 3 git / usage issue.
+
+set -euo pipefail
+
+# --- discovery -------------------------------------------------------------
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+    echo "agent: not inside a git repo" >&2; exit 3
+}
+AGENT_DIR="$ROOT/.agent"
+LOG_DIR="$AGENT_DIR/log"
+CONFIG="$AGENT_DIR/config"
+EDITOR="${EDITOR:-vi}"
+
+new_id()  { od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || date +%s; }
+ts()      { date -u +%Y-%m-%dT%H:%M:%SZ; }
+ts_s()    { date -u +%Y%m%dT%H%M%SZ; }
+
+identity() {
+    if [[ -n "${AGENT_ID:-}" ]]; then printf '%s' "$AGENT_ID"; return; fi
+    if [[ -f "$CONFIG" ]]; then
+        local v; v="$(sed -n 's/^identity:[[:space:]]*//p' "$CONFIG" | head -1)"
+        [[ -n "$v" ]] && { printf '%s' "$v"; return; }
+    fi
+    return 1
+}
+
+ensure_scaffold() {
+    mkdir -p "$LOG_DIR"
+    [[ -f "$AGENT_DIR/.gitkeep" ]] || touch "$AGENT_DIR/.gitkeep"
+}
+
+# body(): prefer --message / piped stdin; only open an editor on a real tty.
+BODY_INLINE=""
+body() {
+    if [[ -n "$BODY_INLINE" ]]; then printf '%s\n' "$BODY_INLINE"; return; fi
+    if [[ ! -t 0 ]]; then cat; return; fi
+    local f; f="$(mktemp)"; echo "" > "$f"
+    "$EDITOR" "$f"; cat "$f"; rm -f "$f"
+}
+
+commit_events() {
+    local verb="$1" msg="$2"; shift 2
+    git add -- "$@" >/dev/null
+    git commit -q -m "agent: $verb $msg"
+}
+
+compute_state() {
+    local last_h subj last_h_ts body n_open_i n_open_o
+    # most recent handoff
+    last_h="$(ls -1 "$LOG_DIR"/H--*.md 2>/dev/null | sort | tail -1 || true)"
+    if [[ -n "$last_h" ]]; then
+        subj="$(sed -n 's/^subject:[[:space:]]*//p' "$last_h" | head -1)"
+        last_h_ts="$(sed -n 's/^ts:[[:space:]]*//p' "$last_h" | head -1)"
+    fi
+    n_open_i="$(open_events I | wc -l)"
+    n_open_o="$(open_events O | wc -l)"
+    {
+        echo "# State"
+        echo
+        echo "- Updated: $(ts)"
+        echo "- Identity: $(identity || echo unset)"
+        echo "- Repo: $ROOT"
+        echo
+        echo "## Latest handoff"
+        if [[ -n "$last_h" ]]; then
+            echo "- $last_h_ts — ${subj:-}"
+            awk '/^---$/{n++; next} n>=2{print}' "$last_h" | sed '/^[[:space:]]*$/d'
+        else
+            echo "- (none yet — run \`agent handoff\`)"
+        fi
+        echo
+        echo "## Open inbound ($n_open_i)"
+        list_events I
+        echo
+        echo "## Open outbound ($n_open_o)"
+        list_events O
+        echo
+    }
+}
+
+# append_state: write the current projection as an S-- event (append-only).
+# Returns the event file path so the caller can commit it alongside the primary event.
+append_state() {
+    local body id ts
+    id="$(new_id)"; ts="$(ts)"
+    body="$(compute_state)"
+    write_event "$LOG_DIR" S "$id" "$ts" "$body" "subject: state snapshot"
+}
+
+# frontmatter field helper
+fm() { sed -n "s/^$1:[[:space:]]*//p" "$2" | head -1; }
+
+# open_events TYPE: events of TYPE with no resolve OR claim marker targeting them.
+open_events() {
+    local type="$1" f marker
+    for f in "$LOG_DIR"/"$type"--*.md; do
+        [[ -f "$f" ]] || continue
+        local id; id="$(fm id "$f")"
+        marker=""
+        for r in "$LOG_DIR"/R--*.md "$LOG_DIR"/C--*.md; do
+            [[ -f "$r" ]] || continue
+            [[ "$(fm re "$r")" == "$id" ]] && { marker=1; break; }
+        done
+        [[ -z "$marker" ]] && printf '%s\n' "$f"
+    done
+    return 0
+}
+
+list_events() {
+    local type="$1" f
+    for f in $(open_events "$type"); do
+        printf '  - %s %s → %s: %s  (id %s)\n' \
+            "$(fm ts "$f")" "$(fm from "$f")" "$(fm to "$f")" \
+            "$(fm subject "$f")" "$(fm id "$f")"
+    done
+}
+
+write_event() {
+    local dir="$1" type="$2" id="$3" ts="$4" body="$5" extra="$6"
+    mkdir -p "$dir"
+    local file
+    file="$dir/${type}--$(date -u +%Y%m%dT%H%M%SZ)-$id.md"
+    local from; from="$(identity)" || { echo "agent: no identity — run 'agent init' or set AGENT_ID" >&2; exit 3; }
+    {
+        echo "---"
+        echo "type: $type"
+        echo "id: $id"
+        echo "ts: $ts"
+        echo "from: $from"
+        [[ -n "$extra" ]] && printf '%s\n' "$extra"
+        echo "---"
+        echo
+        printf '%s\n' "$body"
+    } > "$file"
+    printf '%s' "$file"
+}
+
+# target_repo PATH -> resolves to a git repo path, or "" (not found).
+target_repo() {
+    local t="$1"
+    [[ -z "$t" || "$t" == "-" ]] && return 0
+    # if it's an existing dir, resolve it directly
+    local cand
+    cand="$(cd "$t" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || true)"
+    [[ -n "$cand" ]] && { printf '%s' "$(cd "$cand" && pwd -P)"; return 0; }
+    return 1
+}
+
+# find_event ID -> path to the event file with that id, or "" (not found).
+find_event() {
+    local id="$1" f
+    for f in "$LOG_DIR"/*.md; do
+        [[ "$(fm id "$f")" == "$id" ]] && { printf '%s' "$f"; return 0; }
+    done
+    return 1
+}
+
+cmd_init() {
+    local id="${1:-}"; shift || true
+    mkdir -p "$AGENT_DIR"
+    if [[ -n "$id" ]]; then
+        printf 'identity: %s\n' "$id" > "$CONFIG"
+    elif [[ ! -f "$CONFIG" ]]; then
+        printf 'identity: %s\n' "$(basename "$ROOT")" > "$CONFIG"
+    fi
+    ensure_scaffold
+    git add -- "$CONFIG" "$AGENT_DIR/log" "$AGENT_DIR/.gitkeep" >/dev/null 2>&1 || true
+    if git diff --cached --quiet; then
+        echo "agent: .agent/ already initialized"
+    else
+        git commit -q -m "agent: init event log" || true
+        echo "agent: initialized $AGENT_DIR"
+    fi
+}
+
+cmd_identity() {
+    if [[ $# -gt 0 ]]; then
+        mkdir -p "$AGENT_DIR"
+        printf 'identity: %s\n' "$1" > "$CONFIG"
+        local sf; sf="$(append_state)"
+        git add -- "$CONFIG" "$sf" >/dev/null
+        git commit -q -m "agent: set identity to $1" || true
+        echo "identity: $1"
+    else
+        identity || echo "identity: (unset — run 'agent init <name>' or set AGENT_ID)"
+    fi
+}
+
+cmd_handoff() {
+    local subj="" pos=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -m|--message) BODY_INLINE="${2:?--message needs a value}"; shift 2 ;;
+            --) shift; pos+=("$@"); break ;;
+            -*) echo "agent: unknown option $1" >&2; exit 3 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    subj="${pos[0]:?usage: agent handoff <subject> [-m BODY]}"
+    ensure_scaffold
+    local id ts body f
+    id="$(new_id)"; ts="$(ts)"; body="$(body)"
+    f="$(write_event "$LOG_DIR" H "$id" "$ts" "$body" "subject: $subj")"
+    sf="$(append_state)"
+    commit_events handoff "$subj" "$f" "$sf"
+    echo "handoff: $subj  ($(basename "$f"))"
+}
+
+cmd_send() {
+    local to="" subj="" thread="" target="" pos=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --thread) thread="${2:?--thread needs a value}"; shift 2 ;;
+            --target) target="${2:?--target needs a value}"; shift 2 ;;
+            -m|--message) BODY_INLINE="${2:?--message needs a value}"; shift 2 ;;
+            --) shift; pos+=("$@"); break ;;
+            -*) echo "agent: unknown option $1" >&2; exit 3 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    to="${pos[0]:?usage: agent send <to> <subject> [--target PATH|NAME] [--thread T]}"
+    subj="${pos[1]:?usage: agent send <to> <subject> [--target PATH|NAME] [--thread T]}"
+    ensure_scaffold
+    [[ -n "$thread" ]] || thread="$(new_id)"
+    local id ts body f tpath tname myname extra
+    id="$(new_id)"; ts="$(ts)"; body="$(body)"
+    myname="$(basename "$ROOT")"
+    # resolve the target first so both halves can carry a mirror: link
+    tpath=""; tname=""
+    if tpath="$(target_repo "$target" 2>/dev/null)" && [[ -n "$tpath" ]]; then
+        tname="$(basename "$tpath")"
+    fi
+    # my outbound record (self-describing: names the counterpart repo)
+    extra="to: $to
+thread: $thread
+subject: $subj"
+    [[ -n "$tname" ]] && extra="$extra
+mirror: $tname"
+    f="$(write_event "$LOG_DIR" O "$id" "$ts" "$body" "$extra")"
+    # mirrored inbound in the target repo
+    if [[ -n "$tpath" ]]; then
+        write_event "$tpath/.agent/log" I "$id" "$ts" "$body" "to: $to
+thread: $thread
+subject: $subj
+mirror: $myname" >/dev/null
+        ( cd "$tpath" && git add -- .agent >/dev/null && git commit -q -m "agent: in $subj (from $(identity))" ) || true
+        echo "mirrored → $tpath"
+    else
+        echo "note: target '$target' not a local repo — outbound recorded (in transit)"
+    fi
+    local sf; sf="$(append_state)"
+    commit_events send "$subj" "$f" "$sf"
+    echo "sent: $subj → $to  (thread $thread, $(basename "$f"))"
+}
+
+cmd_reply() {
+    local subj="" target_flag="" pos=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --target) target_flag="${2:?--target needs a value}"; shift 2 ;;
+            -m|--message) BODY_INLINE="${2:?--message needs a value}"; shift 2 ;;
+            --) shift; pos+=("$@"); break ;;
+            -*) echo "agent: unknown option $1" >&2; exit 3 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    local target="${pos[0]:?usage: agent reply <event-id> [subject] [--target PATH|NAME]}"
+    local tgt; tgt="$(find_event "$target")"
+    [[ -n "$tgt" ]] || { echo "agent: no event with id $target" >&2; exit 3; }
+    local ttype tfrom tto tthread tsubj
+    ttype="$(fm type "$tgt")"
+    tfrom="$(fm from "$tgt")"
+    tto="$(fm to "$tgt")"
+    tthread="$(fm thread "$tgt")"
+    tsubj="$(fm subject "$tgt")"
+    subj="${pos[1]:-Re: $tsubj}"
+    # reply goes the opposite direction of the target
+    local type to
+    if [[ "$ttype" == "I" ]]; then type=O; to="$tfrom"; else type=I; to="$tto"; fi
+    ensure_scaffold
+    local id ts body f tpath tname myname extra otype
+    id="$(new_id)"; ts="$(ts)"; body="$(body)"
+    myname="$(basename "$ROOT")"
+    tpath=""; tname=""
+    if tpath="$(target_repo "$target_flag" 2>/dev/null)" && [[ -n "$tpath" ]]; then
+        tname="$(basename "$tpath")"
+    fi
+    extra="to: $to
+thread: $tthread
+subject: $subj
+re: $target"
+    [[ -n "$tname" ]] && extra="$extra
+mirror: $tname"
+    f="$(write_event "$LOG_DIR" "$type" "$id" "$ts" "$body" "$extra")"
+    if [[ -n "$tpath" ]]; then
+        [[ "$type" == "I" ]] && otype=O || otype=I
+        write_event "$tpath/.agent/log" "$otype" "$id" "$ts" "$body" "to: $to
+thread: $tthread
+subject: $subj
+re: $target
+mirror: $myname" >/dev/null
+        ( cd "$tpath" && git add -- .agent >/dev/null && git commit -q -m "agent: reply $subj (from $(identity))" ) || true
+        echo "mirrored → $tpath"
+    fi
+    local sf; sf="$(append_state)"
+    commit_events reply "$subj" "$f" "$sf"
+    echo "replied: $subj → $to  ($(basename "$f"))"
+}
+
+cmd_resolve() {
+    local target="" reason="resolved" target_flag="" pos=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --target) target_flag="${2:?--target needs a value}"; shift 2 ;;
+            --) shift; pos+=("$@"); break ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    target="${pos[0]:?usage: agent resolve <event-id> [reason] [--target REPO]}"
+    [[ ${#pos[@]} -gt 1 ]] && reason="${pos[*]:1}"
+    ensure_scaffold
+    local id ts f tpath mirror ev
+    id="$(new_id)"; ts="$(ts)"
+    f="$(write_event "$LOG_DIR" R "$id" "$ts" "reason: $reason" "re: $target")"
+    # propagate: follow the event's mirror link (or an explicit --target)
+    ev="$(find_event "$target")"
+    mirror="$(fm mirror "$ev" 2>/dev/null)"
+    [[ -n "$mirror" ]] || mirror="$target_flag"
+    if tpath="$(target_repo "$mirror" 2>/dev/null)" && [[ -n "$tpath" ]]; then
+        write_event "$tpath/.agent/log" R "$id" "$ts" "reason: $reason" "re: $target" >/dev/null
+        ( cd "$tpath" && git add -- .agent >/dev/null && git commit -q -m "agent: resolve $target ($reason, from $(identity))" ) || true
+        echo "resolution mirrored → $tpath"
+    elif [[ -n "$mirror" ]]; then
+        echo "note: mirror '$mirror' not co-located — resolution local only"
+    fi
+    local sf; sf="$(append_state)"
+    commit_events resolve "$reason" "$f" "$sf"
+    echo "resolved: $target ($reason)"
+}
+
+cmd_claim() {
+    local target="" reason="claimed" pos=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --) shift; pos+=("$@"); break ;;
+            -*) echo "agent: unknown option $1" >&2; exit 3 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    target="${pos[0]:?usage: agent claim <event-id> [reason]}"
+    [[ ${#pos[@]} -gt 1 ]] && reason="${pos[*]:1}"
+    local ev; ev="$(find_event "$target")"
+    [[ -n "$ev" ]] || { echo "agent: no event with id $target" >&2; exit 3; }
+    ensure_scaffold
+    local id ts f
+    id="$(new_id)"; ts="$(ts)"
+    f="$(write_event "$LOG_DIR" C "$id" "$ts" "reason: $reason" "re: $target")"
+    local sf; sf="$(append_state)"
+    commit_events claim "$target" "$f" "$sf"
+    echo "claimed: $target ($reason)"
+}
+
+cmd_inbox() { echo "## Inbox (open inbound)"; list_events I; }
+cmd_outbox(){ echo "## Outbox (open outbound)"; list_events O; }
+
+cmd_state() {
+    local latest_s
+    latest_s="$(ls -1 "$LOG_DIR"/S--*.md 2>/dev/null | sort | tail -1 || true)"
+    if [[ -n "$latest_s" ]]; then
+        awk '/^---$/{n++; next} n>=2{print}' "$latest_s"
+    else
+        compute_state
+    fi
+}
+
+cmd_log() {
+    local f
+    for f in $(ls -1 "$LOG_DIR"/*.md 2>/dev/null | sort); do
+        printf '%s  %-1s  %s → %s  %s\n' \
+            "$(fm ts "$f")" "$(fm type "$f")" "$(fm from "$f")" \
+            "$(fm to "$f" || echo -)" "$(fm subject "$f")"
+    done
+}
+
+cmd_check() {
+    local rc=0 types="H O I R C S" f
+    # schema + filename conformity
+    for f in "$LOG_DIR"/*.md; do
+        [[ -f "$f" ]] || continue
+        local t id base bn
+        t="$(fm type "$f")"
+        id="$(fm id "$f")"
+        base="$(basename "$f")"
+        bn="${base%%--*}"
+        case " $types " in
+            *" $t "*) ;;
+            *) echo "check: bad type '$t' in $base"; rc=2 ;;
+        esac
+        [[ "$bn" == "$t" ]] || { echo "check: filename/type mismatch in $base"; rc=2; }
+        [[ -n "$id" && "$id" != "-" ]] || { echo "check: missing id in $base"; rc=2; }
+        [[ "$(fm ts "$f")" == *T*Z ]] || { echo "check: bad ts in $base"; rc=2; }
+        case "$t" in
+            O|I) [[ -n "$(fm to "$f")" && -n "$(fm thread "$f")" ]] \
+                    || { echo "check: O/I needs to+thread in $base"; rc=2; } ;;
+            R|C) [[ -n "$(fm re "$f")" ]] || { echo "check: $t needs re in $base"; rc=2; } ;;
+        esac
+    done
+    # git state
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "check: not a git repo"; rc=3
+    elif [[ -n "$(git status --porcelain)" ]]; then
+        echo "check: uncommitted changes present"; rc=3
+    fi
+    if [[ $rc -eq 0 ]]; then echo "check: clean ($(ls -1 "$LOG_DIR"/*.md 2>/dev/null | wc -l) events)"; fi
+    exit $rc
+}
+
+cmd_help() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# --- dispatch --------------------------------------------------------------
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    init)     cmd_init "$@" ;;
+    identity) cmd_identity "$@" ;;
+    handoff)  cmd_handoff "$@" ;;
+    send)     cmd_send "$@" ;;
+    reply)    cmd_reply "$@" ;;
+    resolve)  cmd_resolve "$@" ;;
+    claim)    cmd_claim "$@" ;;
+    inbox)    cmd_inbox ;;
+    outbox)   cmd_outbox ;;
+    state)    cmd_state ;;
+    log)      cmd_log ;;
+    check)    cmd_check ;;
+    --help|-h|help|"") cmd_help ;;
+    *) echo "agent: unknown command '$cmd'" >&2; echo "try: agent --help" >&2; exit 3 ;;
+esac
