@@ -38,9 +38,11 @@ from zk_memory.corpus import (
 )
 from zk_memory.indexing import (
     AutoProvider,
+    EmbeddingProvider,
     IndexProvider,
     LanceDBProvider,
     RgProvider,
+    VectorProvider,
     get_provider,
     register_backend,
 )
@@ -57,9 +59,11 @@ __all__ = [
     "write",
     # index-provider abstraction
     "AutoProvider",
+    "EmbeddingProvider",
     "IndexProvider",
     "LanceDBProvider",
     "RgProvider",
+    "VectorProvider",
     "get_provider",
     "register_backend",
 ]

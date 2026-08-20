@@ -16,6 +16,9 @@ dependencies = []
 # Rich full-text recall. Official PyPI `lancedb` (not a fork). Optional:
 # search degrades to a `rg`-based fallback when this extra isn't installed.
 lancedb = ["lancedb>=0.15", "pyarrow>=14"]
+# Vector similarity recall. Optional: the VectorProvider degrades to [] when
+# faiss isn't installed (the embedder is always caller-supplied, like the LLM).
+faiss = ["faiss-cpu>=1.15"]
 test = ["pytest>=7"]
 
 [project.scripts]

@@ -47,7 +47,7 @@ zk_memory/
   __init__.py     # exports Memory + module-level corpus functions
   memory.py       # Memory(root, llm=None, tracer=None) — the embeddable object
   corpus.py       # list/search/read/write/merge/tend (all take an explicit root)
-  indexing.py     # IndexProvider protocol + Rg/LanceDB/Auto providers + registry
+  indexing.py     # IndexProvider + EmbeddingProvider protocols; Rg/LanceDB/Auto/Vector providers; registry
   fts.py          # LanceDB FTS engine (optional; search falls back to rg)
   retain.py       # retain_turn / retain_messages / process_candidate
   judge.py        # StructuredLLM protocol + distill/merge prompts & schemas
@@ -152,6 +152,14 @@ integrate later; recency is the priority.
   extra (`zk-memory[lancedb]`); "other" providers are necessarily caller-supplied
   at runtime, hence the DI seam. Recall never hard-fails: `auto`/`rg` fall back
   to ripgrep, `fts`-only returns [] when lancedb is absent.
+- **Vector recall is a DI seam, not a backend string.** `indexing.VectorProvider`
+  (`zk-memory[faiss]`) is a FAISS `IndexProvider` that needs an injected
+  `EmbeddingProvider` (the vector counterpart to `StructuredLLM` — the library
+  never imports a provider SDK). It's injected as `Memory(index=VectorProvider(embedder))`,
+  never a `backend=` name, because the embedder is caller-supplied. The index is
+  built lazily and cached against a corpus signature (path+mtime+size), so it
+  re-embeds only changed files. A missing faiss or embedder degrades to []
+  (never hard-fails).
 - **Tests.** `pytest` in the repo root. Judge tests use `StructuredLLM`
   stubs — never fake OpenAI clients. To force search down the `rg` fallback,
   install a fake `zk_memory.fts` whose `run_fts` raises `ImportError`, or
