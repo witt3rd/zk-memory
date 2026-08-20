@@ -56,6 +56,23 @@ class IndexProvider(Protocol):
     ) -> list[dict[str, Any]]: ...
 
 
+@runtime_checkable
+class EmbeddingProvider(Protocol):
+    """Maps text to dense vectors — the injectable embedder for vector recall.
+
+    The counterpart to ``StructuredLLM``: the library never imports a
+    provider SDK. A caller supplies an object (e.g. an OpenAI-compatible
+    ``/v1/embeddings`` adapter, a local model) whose ``embed`` returns one
+    vector per input text. ``embed`` must not raise on a transient failure;
+    return a best-effort list (callers treat a short/failed result as a
+    recall miss).
+    """
+
+    name: str
+
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+
 # ---------------------------------------------------------------------------
 # Built-ins
 # ---------------------------------------------------------------------------
@@ -155,6 +172,104 @@ class AutoProvider:
         if res is not None:
             return res
         return self.rg.search(root, query, limit=limit, rebuild_index=rebuild_index)
+
+
+class VectorProvider:
+    """Vector-similarity recall over a corpus, backed by an injected
+    ``EmbeddingProvider`` and a FAISS index.
+
+    Not selectable by a ``backend="vector"`` string — it needs an embedder,
+    so it is injected via ``Memory(index=VectorProvider(embedder))`` /
+    ``corpus.search(..., index=...)`` (the DI seam). faiss is an optional
+    extra (``zk-memory[faiss]``); a missing faiss or embedder degrades to []
+    (never hard-fails).
+
+    The index is rebuilt lazily and cached against a corpus signature
+    (path + mtime + size per note), so a changed corpus re-embeds only the
+    changed files on the next search. ``score`` is the metric distance
+    (lower is better for L2); ``_rank`` carries the search position.
+    """
+
+    name = "vector"
+
+    def __init__(self, embedder: Any, *, metric: str = "l2") -> None:
+        self.embedder: Any = embedder
+        self.metric = metric
+        self._sig: Any = None
+        self._rows: list[dict[str, Any]] = []
+        self._index: Any = None
+
+    def search(
+        self,
+        root: Path,
+        query: str,
+        *,
+        limit: int = 8,
+        rebuild_index: bool = False,
+    ) -> list[dict[str, Any]]:
+        if self.embedder is None:
+            return []
+        try:
+            import faiss  # noqa: F401
+            import numpy as np
+        except ImportError:
+            return []
+        if not root.is_dir():
+            return []
+        qv = self._embed([query])
+        if not qv:
+            return []
+        self._ensure_index(root, np, rebuild=rebuild_index)
+        if self._index is None:
+            return []
+        query_vec = np.asarray(qv[0], dtype="float32").reshape(1, -1)
+        distances, indices = self._index.search(query_vec, limit)
+        out: list[dict[str, Any]] = []
+        for rank, idx in enumerate(indices[0]):
+            if idx < 0 or idx >= len(self._rows):
+                continue
+            note = dict(self._rows[idx])
+            note["score"] = float(distances[0, rank])
+            note["_rank"] = rank
+            out.append(note)
+        return out
+
+    # -- internals ------------------------------------------------------
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        """Best-effort embed; returns [] on any failure (recall miss)."""
+        try:
+            return self.embedder.embed(texts)
+        except Exception:
+            return []
+
+    def _corpus_signature(self, root: Path) -> tuple:
+        """(path, mtime, size) per note — cheaply detects corpus changes."""
+        sig = []
+        for f in sorted(root.glob("*.md")):
+            st = f.stat()
+            sig.append((f.name, st.st_mtime, st.st_size))
+        return tuple(sig)
+
+    def _ensure_index(self, root: Path, np: Any, *, rebuild: bool) -> None:
+        sig = self._corpus_signature(root)
+        if not rebuild and sig == self._sig and self._index is not None:
+            return
+        from zk_memory.corpus import list_notes
+        notes = list_notes(root)
+        if not notes:
+            self._rows, self._index, self._sig = [], None, sig
+            return
+        vecs = self._embed([n["body"] for n in notes])
+        if len(vecs) != len(notes):
+            # partial/failed embed — can't index cleanly
+            self._rows, self._index, self._sig = [], None, sig
+            return
+        import faiss
+        emb = np.asarray(vecs, dtype="float32")
+        index = faiss.IndexFlatL2(emb.shape[1])
+        index.add(emb)
+        self._rows, self._index, self._sig = notes, index, sig
 
 
 # ---------------------------------------------------------------------------
