@@ -36,6 +36,7 @@ from zk_memory.corpus import (
     tend,
     write,
 )
+from zk_memory.integrate import decide_merge_target, integrate
 from zk_memory.indexing import (
     AutoProvider,
     EmbeddingProvider,
@@ -57,6 +58,9 @@ __all__ = [
     "search",
     "tend",
     "write",
+    # careful-write pipeline
+    "decide_merge_target",
+    "integrate",
     # index-provider abstraction
     "AutoProvider",
     "EmbeddingProvider",

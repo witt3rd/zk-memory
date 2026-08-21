@@ -27,7 +27,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from zk_memory import corpus
-from zk_memory.judge import StructuredLLM, judge_merge
+from zk_memory.integrate import decide_merge_target
+from zk_memory.judge import StructuredLLM
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,38 @@ def _reconcile_note(
     slug = note.get("slug", "")
     kind = note.get("kind", "")
     topic = (note.get("title") or slug or "").strip()
+    body = (note.get("body") or "").strip()
     try:
+        if not body:
+            tracer("tend_writes", root, action="kept", ref=ref, slug=slug)
+            return {"ref": ref, "slug": slug, "action": "kept"}
+
+        # The shared judgment spine (search + filter + judge + verify).
+        # exclude_ref/path keep this note from being compared to itself;
+        # decisions never merge (decide_merge_target returns None for them).
+        target_ref = decide_merge_target(
+            root,
+            content=body,
+            topic=topic,
+            kind=kind,
+            llm=llm,
+            index=index,
+            limit=5,
+            exclude_ref=ref,
+            exclude_path=note.get("path"),
+        )
+
+        if target_ref:
+            _fold_and_archive(root, note, target_ref, source, archive_dir)
+            tracer(
+                "tend_writes", root, action="merged", ref=ref, slug=slug,
+                kind=kind, target=target_ref,
+            )
+            return {"ref": ref, "slug": slug, "action": "merged", "target": target_ref}
+
+        # No verified merge target: fetch the related notes and link them so
+        # the graph grows. Decisions (and near-duplicates the judge declined)
+        # land here — decisions are append-only history, never folded.
         hits = corpus.search(topic, root, limit=5, index=index) if topic else []
         others = [
             h for h in hits
@@ -100,34 +132,6 @@ def _reconcile_note(
         if not other_notes:
             tracer("tend_writes", root, action="kept", ref=ref, slug=slug)
             return {"ref": ref, "slug": slug, "action": "kept"}
-
-        # Decisions are append-only history: never fold one into an existing
-        # note; a new decision on the same topic is a new dated zettel.
-        if kind == "decision":
-            added = _link_related(root, note, other_notes)
-            tracer("tend_writes", root, action="linked", ref=ref, slug=slug, kind=kind, links=added)
-            return {"ref": ref, "slug": slug, "action": "linked", "links": added}
-
-        decision = judge_merge(
-            {"kind": kind or "concept", "content": note.get("body", "") or ""},
-            other_notes,
-            llm,
-        )
-        if decision and decision.get("action") == "merge":
-            target_ref = (decision.get("merge_target_ref") or "").strip()
-            valid = {n.get("uuid") for n in other_notes if n.get("uuid")}
-            if target_ref and target_ref in valid:
-                _fold_and_archive(root, note, target_ref, source, archive_dir)
-                tracer(
-                    "tend_writes", root, action="merged", ref=ref, slug=slug,
-                    kind=kind, target=target_ref,
-                )
-                return {"ref": ref, "slug": slug, "action": "merged", "target": target_ref}
-            if target_ref:
-                logger.warning(
-                    "zk-memory: tend_writes merge_target_ref %r not among hits; keeping",
-                    target_ref,
-                )
 
         added = _link_related(root, note, other_notes)
         tracer("tend_writes", root, action="linked", ref=ref, slug=slug, kind=kind, links=added)

@@ -15,6 +15,7 @@ from typing import Any, Optional
 from zk_memory import corpus
 from zk_memory import probe
 from zk_memory.indexing import IndexProvider, get_provider
+from zk_memory.integrate import integrate as _integrate
 from zk_memory.judge import StructuredLLM
 from zk_memory.retain import retain_messages, retain_turn
 from zk_memory.tend import tend_writes as _tend_writes
@@ -182,4 +183,52 @@ class Memory:
         return _tend_writes(
             self._root, self._llm, self._tracer, limit=limit, source=source,
             index=self._index,
+        )
+
+    def integrate(
+        self,
+        content: str,
+        *,
+        topic: str,
+        kind: str = "concept",
+        title: Optional[str] = None,
+        slug: Optional[str] = None,
+        choice: Optional[str] = None,
+        rationale: Optional[str] = None,
+        source: Optional[str] = None,
+        index: Any = None,
+    ) -> dict[str, Any]:
+        """The careful write: place one atomic memory so it integrates with
+        the corpus — merge into the right existing note, else create a new one.
+
+        This is the same judgment spine the capture-time (``retain_turn``)
+        and gardener (``tend_writes``) paths compose over: search the topic,
+        judge merge-vs-create against the fetched hits, verify the merge
+        target, then append (append-only) or write. Requires an ``llm``;
+        without one returns ``{"action": "error", "err": ...}``.
+
+        Returns ``{action, target?, path?, uuid?}``:
+          - ``{"action": "merged", "target": <uuid>}`` — appended into an
+            existing note.
+          - ``{"action": "created", "path", "uuid"}`` — a new atomic note.
+        """
+        if source is None:
+            source = self._source
+        if index is None:
+            index = self._index
+        if self._llm is None:
+            return {"action": "error", "err": "no LLM configured; integrate requires an llm"}
+        return _integrate(
+            self._root,
+            content=content,
+            topic=topic,
+            kind=kind,
+            llm=self._llm,
+            source=source,
+            index=index,
+            title=title,
+            slug=slug,
+            choice=choice,
+            rationale=rationale,
+            tracer=self._tracer,
         )
