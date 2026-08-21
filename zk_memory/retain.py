@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from zk_memory import corpus
-from zk_memory.judge import StructuredLLM, distill_text, judge_merge
+from zk_memory.integrate import integrate
+from zk_memory.judge import StructuredLLM, distill_text
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +129,12 @@ def process_candidate(
     """Route one distilled candidate: merge into an existing note if the
     merge judge picks one of the search hits, otherwise create a new note.
 
-    ``source`` (host/agent attribution) is passed through to
-    ``corpus.write`` / ``corpus.merge``. Returns the retained label (title
-    or topic) on success, else None. Never raises — failures are logged
-    and skipped so one bad candidate doesn't drop the rest of the turn's
+    This is the capture-time flavor of the careful write — it composes over
+    ``zk_memory.integrate.integrate`` (the shared search→judge→merge|create
+    spine). ``source`` (host/agent attribution) is passed through; ``index``
+    is the recall ``IndexProvider``. Returns the retained label (title or
+    topic) on success, else None. Never raises — failures are logged and
+    skipped so one bad candidate doesn't drop the rest of the turn's
     candidates.
     """
     try:
@@ -143,61 +146,9 @@ def process_candidate(
         # note, which would bury the authoritative choice). A later
         # decision on the same topic becomes a new dated note — both are
         # kept as history (write() refuses to overwrite by filename).
-        is_decision = kind == "decision"
-
-        target_ref = None
-        if not is_decision and topic:
-            hits = corpus.search(topic, root, limit=3, index=index)
-            if hits:
-                notes = []
-                for h in hits:
-                    ref = h.get("uuid") or h.get("slug")
-                    if not ref:
-                        continue
-                    result = corpus.read(ref, root, resolve_links=False)
-                    if result["found"]:
-                        notes.append(result["note"])
-                if notes:
-                    decision = judge_merge(candidate, notes, llm)
-                    if decision and decision.get("action") == "merge":
-                        candidate_ref = (decision.get("merge_target_ref") or "").strip()
-                        valid_refs = {n.get("uuid") for n in notes if n.get("uuid")}
-                        if candidate_ref and candidate_ref in valid_refs:
-                            target_ref = candidate_ref
-                        elif candidate_ref:
-                            logger.warning(
-                                "zk-memory: merge_target_ref %r not among fetched hits; falling back to create",
-                                candidate_ref,
-                            )
-
-        if target_ref:
-            content = (candidate.get("content") or "").strip()
-            if not content:
-                tracer(
-                    "candidate_decision", root, kind=kind, topic=topic,
-                    action="merge_skipped_empty_content", target=target_ref,
-                )
-                return None
-            result = corpus.merge(target_ref, content, root, source=source)
-            if not result.get("ok"):
-                logger.warning("zk-memory: merge failed: %s", result.get("err"))
-                tracer(
-                    "candidate_decision", root, kind=kind, topic=topic,
-                    action="merge_failed", target=target_ref, ok=False,
-                    err=result.get("err"),
-                )
-                return None
-            tracer(
-                "candidate_decision", root, kind=kind, topic=topic,
-                action="merge", target=target_ref, ok=result.get("ok"),
-                err=result.get("err"),
-            )
-            return candidate.get("title") or candidate.get("topic") or None
-
-        slug = (candidate.get("slug") or "").strip()
-        title = (candidate.get("title") or "").strip()
         content = (candidate.get("content") or "").strip()
-        if not slug or not title or not content:
+
+        if not topic and not content:
             logger.warning("zk-memory: candidate incomplete (slug/title/content); skipping")
             tracer(
                 "candidate_decision", root, kind=kind, topic=topic,
@@ -205,35 +156,40 @@ def process_candidate(
             )
             return None
 
-        body = content
-        if is_decision:
-            choice = (candidate.get("choice") or "").strip()
-            rationale = (candidate.get("rationale") or "").strip()
-            parts = []
-            if choice:
-                parts.append(f"**Decision:** {choice}")
-            parts.append(content)
-            if rationale:
-                parts.append(f"**Rationale:** {rationale}")
-            body = "\n\n".join(parts)
+        outcome = integrate(
+            root,
+            content=content,
+            topic=topic,
+            kind=kind,
+            llm=llm,
+            source=source,
+            index=index,
+            title=(candidate.get("title") or "").strip(),
+            slug=(candidate.get("slug") or "").strip(),
+            choice=(candidate.get("choice") or "").strip() or None,
+            rationale=(candidate.get("rationale") or "").strip() or None,
+            tracer=tracer,
+        )
 
-        result = corpus.write(slug, title, body, root, source=source)
-        if not result.get("ok"):
-            logger.warning("zk-memory: create failed: %s", result.get("err"))
+        if outcome.get("action") == "error":
             tracer(
                 "candidate_decision", root, kind=kind, topic=topic,
-                action="create_failed", slug=slug, ok=False, err=result.get("err"),
+                action="failed", ok=False, err=outcome.get("err"),
             )
             return None
-        # Stamp the kind so the note is self-describing — the tend pass
-        # reads it to honor "decisions never merge" (append-only history).
-        if kind:
-            corpus._ensure_field(Path(result["path"]), "kind", kind)
-        tracer(
-            "candidate_decision", root, kind=kind, topic=topic,
-            action="create", slug=slug, ok=result.get("ok"), err=result.get("err"),
-        )
-        return title or topic or None
+
+        action = outcome.get("action")
+        if action == "merged":
+            tracer(
+                "candidate_decision", root, kind=kind, topic=topic,
+                action="merge", target=outcome.get("target"), ok=True,
+            )
+        elif action == "created":
+            tracer(
+                "candidate_decision", root, kind=kind, topic=topic,
+                action="create", slug=outcome.get("path"), ok=True,
+            )
+        return candidate.get("title") or candidate.get("topic") or None
     except Exception:
         logger.warning("zk-memory: candidate processing failed", exc_info=True)
         tracer("candidate_decision", root, action="failed")

@@ -47,13 +47,14 @@ zk_memory/
   __init__.py     # exports Memory + module-level corpus functions
   memory.py       # Memory(root, llm=None, tracer=None) — the embeddable object
   corpus.py       # list/search/read/write/merge/tend (all take an explicit root)
+  integrate.py    # the careful-write spine: decide_merge_target + integrate (functional pipeline)
   indexing.py     # IndexProvider + EmbeddingProvider protocols; Rg/LanceDB/Auto/Vector providers; registry
   fts.py          # LanceDB FTS engine (optional; search falls back to rg)
-  retain.py       # retain_turn / retain_messages / process_candidate
+  retain.py       # retain_turn / retain_messages / process_candidate (composes over integrate)
   judge.py        # StructuredLLM protocol + distill/merge prompts & schemas
   probe.py        # trace(event, root, **fields) -> .zk-memory-trace.jsonl
   cli/            # thin CLI: search / read / write / merge / tend / list
-tests/            # corpus ops, probe, judge (StructuredLLM stubs), retain, indexing
+tests/            # corpus ops, probe, judge (StructuredLLM stubs), retain, indexing, integrate
 ```
 
 ## Concepts
@@ -122,6 +123,30 @@ the graph grows. `decision` notes never merge. This is distinct from
 `tend` (linlink structure hygiene: repair/check/mint). Capture fast,
 integrate later; recency is the priority.
 3. **Write** — `merge` (append-only) or `write` (new note).
+
+### The careful-write spine (`integrate.py`)
+
+The merge-or-create judgment is a **single functional pipeline** that three
+entry points compose over, so no path re-implements it:
+
+```
+decide_merge_target(root, *, content, topic, kind, llm, index, limit,
+                    exclude_ref, exclude_path) -> uuid | None
+integrate(root, *, content, topic, kind, llm, ...) -> {action, target?, path?, uuid?}
+```
+
+`decide_merge_target` is the pure decision: search (no LLM) → fetch full
+bodies → drop the note itself (gardener case) → decisions never merge →
+one `judge_merge` across all hits → **verify** the returned ref is among the
+fetched uuids (a hallucinated ref is never honored). `integrate` wraps it
+with the write: append-only `corpus.merge`, or `corpus.write` (building a
+decision body from choice/rationale). Callers compose over it:
+
+- `retain.process_candidate` — capture-time flavor (create; returns label).
+- `tend._reconcile_note` — gardener flavor (keep + link, or fold + archive).
+- `Memory.integrate(...)` — the **public careful write**: a caller hands an
+  atomic memory and gets merge-or-create with full verification. Requires
+  an `llm` (returns `{action:"error"}` without one).
 
 ## Mechanisms
 
