@@ -21,6 +21,7 @@ prefer create. Everything here is mechanical around that judgment.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -31,6 +32,23 @@ logger = logging.getLogger(__name__)
 
 # A tracer is ``callable(event, root, **fields)`` — see zk_memory.probe.
 Tracer = Callable[..., None]
+
+
+def _parent_or_child(root: Path, a_path: Optional[str], b_path: Optional[str]) -> bool:
+    """True when two notes are in a parent/child relation (one links to the
+    other as a split artifact). Deterministic guard: split-produced notes
+    must not be folded back into their own biography (Z12)."""
+    if not a_path or not b_path or a_path == b_path:
+        return False
+    a = root / a_path
+    b = root / b_path
+    if not a.exists() or not b.exists():
+        return False
+    a_raw = a.read_text(errors="replace")
+    b_raw = b.read_text(errors="replace")
+    a_links = set(re.findall(r"\]\(([^)]+?\.md)\)", a_raw))
+    b_links = set(re.findall(r"\]\(([^)]+?\.md)\)", b_raw))
+    return b.name in a_links or a.name in b_links
 
 
 def decide_merge_target(
@@ -76,8 +94,16 @@ def decide_merge_target(
         if not ref:
             continue
         result = corpus.read(ref, root, resolve_links=False)
-        if result["found"]:
-            notes.append(result["note"])
+        if not result["found"]:
+            continue
+        note = result["note"]
+        # Never merge into a note that already has a parent/child relation
+        # with the candidate note (split artifacts must not fold back into
+        # their own biography — Z12). Uses the candidate's own path, passed
+        # as exclude_path in the gardener case.
+        if _parent_or_child(root, exclude_path, note.get("path")):
+            continue
+        notes.append(note)
     if not notes:
         return None
     decision = judge_merge({"kind": kind or "concept", "content": content}, notes, llm)

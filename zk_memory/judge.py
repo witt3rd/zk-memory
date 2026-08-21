@@ -298,6 +298,126 @@ def judge_merge(
     )
 
 
+# ---------------------------------------------------------------------------
+# Stage 3 — de-merge / split: a biography note into a summary parent + atomic
+# children (the inverse of judge_merge; Z12).
+# ---------------------------------------------------------------------------
+
+_SPLIT_FRAGMENT_MAX = 4
+
+_SPLIT_JUDGE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["split"],
+    "properties": {
+        "split": {
+            "type": "boolean",
+            "description": (
+                "True only if this note is a genuine biography — many "
+                "distinct facts/timeline that are no longer one atomic "
+                "thought. False if it's still a single dense idea (never "
+                "over-split)."
+            ),
+        },
+        "parent_summary": {
+            "type": "string",
+            "description": (
+                "When split: a short summary of what this entity/topic is "
+                "and its arc — the reduced parent spine. Own words, "
+                "a few sentences. Ignored when split is false."
+            ),
+        },
+        "fragments": {
+            "type": "array",
+            "maxItems": _SPLIT_FRAGMENT_MAX,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["kind", "title", "slug", "content"],
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["concept", "entity_update", "decision"],
+                        "description": (
+                            "The kind of this atomic child. A decision "
+                            "fragment must be 'decision' and carries "
+                            "choice/rationale — never folded or destroyed."
+                        ),
+                    },
+                    "title": {"type": "string", "description": "Child title."},
+                    "slug": {"type": "string", "description": "Child slug (no date prefix)."},
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "The child's atomic content, own words — one "
+                            "distinct fact/thought from the original. Not a "
+                            "transcript excerpt."
+                        ),
+                    },
+                    "topic": {"type": "string", "description": "Child topic (for its own merge spine)."},
+                    "choice": {
+                        "type": "string",
+                        "description": "For 'decision' fragments: the choice made.",
+                    },
+                    "rationale": {
+                        "type": "string",
+                        "description": "For 'decision' fragments: the rationale.",
+                    },
+                },
+            },
+        },
+    },
+}
+
+_SPLIT_JUDGE_SYSTEM_PROMPT = """You are the split judge for a zettelkasten memory. \
+Given a single note that has grown past atomicity (a biography rather than one \
+thought), decide whether to split it, and if so how.
+
+Split ONLY when the note is genuinely a biography: many distinct facts or a \
+timeline that belong as separate atomic notes. When in doubt, prefer NOT to \
+split — a single dense idea must never be carved into orphans. The split judge \
+is at least as conservative as the merge judge.
+
+If split:
+- The PARENT becomes a short summary: what the entity/topic is and its arc. \
+Reduced, less detailed — the detail lives in the children.
+- Each CHILD is one atomic note preserving a distinct fact/thought from the \
+original, in your own words (never a transcript excerpt). A decision fragment \
+must be a 'decision' child with its choice and rationale.
+- Return AT MOST 4 fragments. If the note has more distinct facts than that, \
+group the most related ones so the count stays within 4 — it will be split \
+again on a later pass if needed.
+- The children are linked to from the parent; you are NOT creating a nested \
+hierarchy — flat notes, linked."""
+
+
+def judge_split(note: dict[str, Any], llm: StructuredLLM) -> Optional[dict[str, Any]]:
+    """Judge whether an overgrown note should be split, and how.
+
+    Returns the parsed decision dict (``{split, parent_summary, fragments}``),
+    or None on any failure (callers treat None as "don't split"). Never raises.
+    ``judge_split`` is the decision half of the de-merge pair — the analogue
+    of ``judge_merge`` for the inverse direction.
+    """
+    body = (note.get("body") or "").strip()
+    title = note.get("title") or note.get("slug") or "?"
+    if not body:
+        return None
+    user_text = (
+        f"Note title: {title}\n\nFull note body:\n{body}\n\n"
+        f"Decide whether to split this note, and if so into a summary parent "
+        f"plus at most {_SPLIT_FRAGMENT_MAX} atomic children."
+    )
+    return llm(
+        [
+            {"role": "system", "content": _SPLIT_JUDGE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_text},
+        ],
+        schema=_SPLIT_JUDGE_SCHEMA,
+        name="record_split_decision",
+    )
+
+
 # Tool descriptions for adapters that route these structured calls through
 # a forced tool call. Kept here so all prompt text lives in the library;
 # adapters (e.g. the Hermes one) look up the description by tool name.
@@ -309,6 +429,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "record_merge_decision": (
         "Decide whether new information belongs in one of the given "
         "existing notes, or is genuinely new. Always call this tool "
+        "exactly once."
+    ),
+    "record_split_decision": (
+        "Decide whether an overgrown biography note should be split into a "
+        "summary parent plus atomic child notes. Always call this tool "
         "exactly once."
     ),
 }

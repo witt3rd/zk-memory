@@ -29,6 +29,7 @@ from typing import Any, Callable, Optional
 from zk_memory import corpus
 from zk_memory.integrate import decide_merge_target
 from zk_memory.judge import StructuredLLM
+from zk_memory.split import split_note as _split_note
 
 logger = logging.getLogger(__name__)
 
@@ -44,16 +45,25 @@ def tend_writes(
     tracer: Tracer,
     *,
     limit: int = 20,
+    split_sweep: int = 0,
     source: Optional[str] = None,
     archive_dir: str = DEFAULT_ARCHIVE_DIR,
     index: Any = None,
 ) -> list[dict[str, Any]]:
-    """Reconcile the most recent writes against the corpus.
+    """Reconcile the most recent writes against the corpus, and split any
+    notes the mechanical sweep surfaced.
 
     Candidates are the newest notes by mtime (writes and merges both touch
     it). Returns a list of ``{ref, slug, action, target?, links?}`` per
     candidate. No ``llm`` -> returns [] (no-op, same as retain without an
     LLM). Never raises.
+
+    ``split_sweep`` (>0) authorizes the gardener to de-merge the top N notes
+    from the mechanical ``split_candidates`` sweep (descending file size).
+    This is the ONLY way a split happens during gardening: the gardener
+    splits exactly the notes the sweep surfaced — never a note it decided on
+    its own, mid-pass, to split. The split results are included in the
+    returned list (action ``"split"``).
 
     ``index`` is the recall ``IndexProvider`` used for the related-notes
     search (None -> the provider resolved by :func:`corpus.search`).
@@ -63,14 +73,73 @@ def tend_writes(
     root = Path(root)
     if not root.is_dir():
         return []
-    notes = corpus.list_notes(root)
-    notes.sort(key=lambda n: (root / n["path"]).stat().st_mtime, reverse=True)
+
     results: list[dict[str, Any]] = []
+
+    # 1. De-merge: split exactly the notes the mechanical sweep surfaced.
+    #    The sweep is the sole authorization — the gardener never decides on
+    #    its own which note to split (Z12).
+    split_refs: set[str] = set()
+    if split_sweep > 0:
+        for cand in split_candidates(root, top=split_sweep):
+            cand_ref = cand.get("ref")
+            if not cand_ref:
+                continue
+            split_refs.add(str(cand_ref))
+            out = _split_note(
+                root, ref=str(cand_ref), llm=llm, source=source,
+                tracer=tracer, archive_dir=archive_dir,
+            )
+            results.append({
+                "ref": cand_ref,
+                "slug": cand.get("slug"),
+                "action": out.get("action"),
+                "parent": out.get("parent"),
+                "children": out.get("children"),
+                "err": out.get("err"),
+            })
+
+    # 2. Reconcile the most recent writes, skipping ones already split away.
+    notes = corpus.list_notes(root)
+    notes = [n for n in notes if (n.get("path") not in split_refs
+                                  and (n.get("uuid") or n.get("slug")) not in split_refs)]
+    notes.sort(key=lambda n: (root / n["path"]).stat().st_mtime, reverse=True)
     for note in notes[:limit]:
         results.append(
             _reconcile_note(root, note, llm, tracer, source=source, archive_dir=archive_dir, index=index)
         )
     return results
+
+
+def split_candidates(root: Any, *, top: int = 10) -> list[dict[str, Any]]:
+    """Mechanical sweep: surface notes that *need* splitting, by descending
+    file size — the cheap, deterministic, no-LLM gate (Z12).
+
+    This is the ONLY source of split authorization. The gardener may split a
+    note if and only if it appears here — it must never decide on its own,
+    mid-pass, that some note should be split.
+
+    Returns a list of ``{ref, slug, path, title, size}`` sorted largest
+    first.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return []
+    notes = []
+    for f in sorted(root.glob("*.md")):
+        size = f.stat().st_size
+        if size <= 0:
+            continue
+        note = corpus.read_note_meta(f)
+        notes.append({
+            "ref": note.get("uuid") or note.get("slug"),
+            "slug": note.get("slug"),
+            "path": f.name,
+            "title": note.get("title") or note.get("slug"),
+            "size": size,
+        })
+    notes.sort(key=lambda n: n["size"], reverse=True)
+    return notes[:top]
 
 
 def _reconcile_note(

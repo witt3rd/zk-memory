@@ -37,6 +37,8 @@ from zk_memory.corpus import (
     write,
 )
 from zk_memory.integrate import decide_merge_target, integrate
+from zk_memory.split import decide_split_fragments, split_note
+from zk_memory.tend import split_candidates
 from zk_memory.indexing import (
     AutoProvider,
     EmbeddingProvider,
@@ -61,6 +63,10 @@ __all__ = [
     # careful-write pipeline
     "decide_merge_target",
     "integrate",
+    # de-merge / split pipeline
+    "decide_split_fragments",
+    "split_note",
+    "split_candidates",
     # index-provider abstraction
     "AutoProvider",
     "EmbeddingProvider",
