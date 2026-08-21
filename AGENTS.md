@@ -39,6 +39,16 @@ The thing worth protecting:
   an existing note; a missed merge is just slight duplication — the safer
   failure. A `merge_target_ref` not among the fetched hits is never trusted.
 - **`rg` fallback.** Search never hard-fails without lancedb.
+- **No free-form semantic tags.** The only tag a note carries is `kind`
+  (`concept` / `entity_update` / `decision`) — a **closed set that drives one
+  structural decision** (whether a note may merge). Free-form / LLM-invented
+  tags are **not allowed**: a tag is semantic only if some consumer acts on
+  it, and nothing here reads arbitrary tags — so they'd be dead frontmatter,
+  a second crude copy of what the note's own content + links already say.
+  Maintaining two copies is where the noise comes from. If a future feature
+  genuinely consumes a tag (grouping, browse, recall filter), add it as a
+  *bounded, closed* vocabulary with that consumer — never "tags for future
+  use."
 
 ## Layout
 
@@ -189,6 +199,17 @@ decision body from choice/rationale). Callers compose over it:
   stubs — never fake OpenAI clients. To force search down the `rg` fallback,
   install a fake `zk_memory.fts` whose `run_fts` raises `ImportError`, or
   pass `backend="rg"`.
+- **Release discipline — cut versions for the consumer, not for yourself.**
+  Callers pin by tag (e.g. `hermes-zk-memory` pins `zk-memory @ ...@vX.Y.Z`),
+  so **a feature is only real to a consumer once it's cut into a release
+  they can pin**. The standing rule: when a feature lands on `main` that a
+  consumer should reach, cut a new version promptly — bump
+  `pyproject.toml` + `__init__.py.__version__` together (minor for additive
+  features, patch for fixes) and tag `vX.Y.Z`. Don't let a pile of landed
+  features accumulate behind an old tag — a consumer pinned to that tag
+  silently misses them. What we do is land the feature and cut the release;
+  **re-pinning a consumer (e.g. the plugin) to the new tag is that repo's own
+  caretaker's job**, not ours to go do.
 
 ## House rules
 
