@@ -101,6 +101,49 @@ shared corpus (Z9).
 forever with no reconciliation; a "gardening" story that only fixes links/uuids and never
 repairs content quality.
 
+## Z11 — No free-form semantic tags
+
+The only tag a note carries is `kind` (`concept` / `entity_update` / `decision`) — a **closed set
+that drives one structural decision** (whether a note may merge). Free-form / LLM-invented tags
+are **not allowed**: a tag is semantic only if some consumer acts on it, and nothing here reads
+arbitrary tags — so they'd be dead frontmatter, a second crude copy of what the note's own
+content + links already say. Maintaining two copies is where the noise comes from. Add a tag
+only as a *bounded, closed* vocabulary paired with a real consumer (grouping, browse, recall
+filter) — never "tags for future use."
+
+**Prevents:** unbounded, unconsumed tag vocabularies becoming dead weight in every note; the
+corpus carrying two divergent descriptions of the same thing (the tags and the prose).
+
+## Z12 — De-merge to restore atomicity (the split discipline)
+
+Merge is heavily engineered (Z2/Z3/Z10); the inverse is not. When an entity note has been merged
+so many times that it's no longer atomic — more a biography than one thought — it must be
+**de-merged**: the parent becomes a *summary* (less detailed, more arc) and the detail is
+preserved in **atomic child notes** the parent links to. Flat corpus, no folders — "parent /
+child" is expressed by links, not nesting.
+
+Rules (mirroring the merge discipline, reversed):
+
+- **Detect** the overgrown note — a "biography smell": disproportionately long body, or many
+  appended dated fragments, vs. the corpus.
+- **Summarize the parent** — the LLM reduces the note to a summary spine: what the entity is,
+  its arc, onward links. The parent trades detail for atomicity.
+- **De-merge into children** — each distinct temporal / attribute / decision fragment becomes
+  its own atomic note, using the existing `kind` taxonomy (this is the *reverse* of
+  `judge_merge`'s "belongs appended here"). **`decision` fragments always become standalone
+  `decision` zettels** — never folded or destroyed.
+- **Link, don't nest** — the parent links `[detail](child-slug.md)` out; children link back.
+- **Append-only, reversible** — the original biography is **retired to `.archive/`**, never
+  deleted; parent + children are new notes. A wrong split is recoverable (Z2/Z10).
+
+**Prefer not to split** — split only when the note is genuinely a biography (many *distinct*
+entities / a timeline), never carve a single dense idea into orphans (the failure Z4 warns
+about). A split judge must be at least as conservative as the merge judge.
+
+**Prevents:** the corpus degrading into long, un-navigable "biography" notes that defeat atomic
+recall; the loss of detail when a note grows (the split preserves detail in children, only the
+parent summarizes); never being able to recover atomicity once merging has overgrown a note.
+
 ---
 
 *Authored 2026-08-17 as part of the split from hermes-zk-memory into a host-agnostic library plus thin Hermes adapter (same shape as the prospecta / hermes-prospecta split).*
