@@ -61,10 +61,11 @@ zk_memory/
   indexing.py     # IndexProvider + EmbeddingProvider protocols; Rg/LanceDB/Auto/Vector providers; registry
   fts.py          # LanceDB FTS engine (optional; search falls back to rg)
   retain.py       # retain_turn / retain_messages / process_candidate (composes over integrate)
-  judge.py        # StructuredLLM protocol + distill/merge prompts & schemas
+  split.py        # the de-merge spine: decide_split_fragments + split_note (Z12)
+  judge.py        # StructuredLLM protocol + distill/merge/split prompts & schemas
   probe.py        # trace(event, root, **fields) -> .zk-memory-trace.jsonl
   cli/            # thin CLI: search / read / write / merge / tend / list
-tests/            # corpus ops, probe, judge (StructuredLLM stubs), retain, indexing, integrate
+tests/            # corpus ops, probe, judge (StructuredLLM stubs), retain, indexing, integrate, split
 ```
 
 ## Concepts
@@ -157,6 +158,37 @@ decision body from choice/rationale). Callers compose over it:
 - `Memory.integrate(...)` — the **public careful write**: a caller hands an
   atomic memory and gets merge-or-create with full verification. Requires
   an `llm` (returns `{action:"error"}` without one).
+
+### The de-merge spine (`split.py`, Z12)
+
+The inverse of merge — restores atomicity when an entity note has grown into
+a biography. Mirrors the merge pair:
+
+```
+decide_split_fragments(root, *, ref, llm, max_fragments=4)
+    -> {split, parent_summary, fragments} | {split: False}   (pure decision)
+split_note(root, *, ref, llm, ...) -> {action, parent, children}  (decision -> write)
+```
+
+`decide_split_fragments` is the pure decision: the split judge (prefer-not-to-
+split, at least as conservative as the merge judge) returns a summary parent
++ atomic children, capped at 4 (schema + defensive truncation). `split_note`
+performs the write: a new summary parent, new atomic children (decisions stay
+standalone `decision` zettels with choice/rationale), links between them, and
+the **original biography retired to `.archive/`** (reversible, never deleted).
+
+- `Memory.split_note(ref)` — the **volitional** entry point: the caller names
+  the note to split. Requires an `llm`.
+- `split_candidates(root, top=)` — the **mechanical sweep**: surfaces notes
+  that *need* splitting by descending file size (no LLM). This is the **sole
+  authorization** to split during gardening.
+- **The gardener splits** — `tend_writes(split_sweep=N)` runs the sweep and
+  de-merges the top N surfaced notes. The gardener splits **only** notes that
+  came from the sweep; it must never decide on its own, mid-pass, that a note
+  should be split. (`split_note` is the shared split primitive.)
+- **Parent/child merge guard** — `decide_merge_target` never merges into a
+  note that already has a parent/child relation with the candidate, so a
+  split artifact isn't folded back into its own biography.
 
 ## Mechanisms
 

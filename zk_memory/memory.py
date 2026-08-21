@@ -18,6 +18,7 @@ from zk_memory.indexing import IndexProvider, get_provider
 from zk_memory.integrate import integrate as _integrate
 from zk_memory.judge import StructuredLLM
 from zk_memory.retain import retain_messages, retain_turn
+from zk_memory.split import split_note as _split_note
 from zk_memory.tend import tend_writes as _tend_writes
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,7 @@ class Memory:
         self,
         *,
         limit: int = 20,
+        split_sweep: int = 0,
         source: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """The content gardener pass: reconcile the most recent writes
@@ -177,12 +179,17 @@ class Memory:
         (append-only fold into an existing note + retired to .archive/),
         linked (out-links to related notes), or kept. ``decision`` notes
         never merge. No-op (returns []) without an ``llm``. Returns a list
-        of ``{ref, slug, action, target?, links?}`` per candidate."""
+        of ``{ref, slug, action, target?, links?}`` per candidate.
+
+        ``split_sweep`` (>0) authorizes the gardener to de-merge the top N
+        notes surfaced by the mechanical ``split_candidates`` sweep (Z12) —
+        the only way a split happens during gardening.
+        """
         if source is None:
             source = self._source
         return _tend_writes(
             self._root, self._llm, self._tracer, limit=limit, source=source,
-            index=self._index,
+            split_sweep=split_sweep, index=self._index,
         )
 
     def integrate(
@@ -231,4 +238,34 @@ class Memory:
             choice=choice,
             rationale=rationale,
             tracer=self._tracer,
+        )
+
+    def split_note(
+        self,
+        ref: str,
+        *,
+        source: Optional[str] = None,
+        max_fragments: int = 4,
+    ) -> dict[str, Any]:
+        """The de-merge / re-atomicize: split one biography note into a
+        summary parent + atomic children (Z12).
+
+        This is the volitional, explicit entry point — the caller names the
+        note to split. The judge decides the parent summary and the child
+        fragments (capped at ``max_fragments``); the original biography is
+        retired to ``.archive/`` (reversible, never deleted). Requires an
+        ``llm``; returns ``{"action": "error", ...}`` without one.
+
+        Returns:
+          - ``{"action": "not_split", "ref"}`` — judge declined.
+          - ``{"action": "split", "parent": <slug>, "children": [...]}``.
+          - ``{"action": "error", "err"}`` on failure.
+        """
+        if source is None:
+            source = self._source
+        if self._llm is None:
+            return {"action": "error", "err": "no LLM configured; split requires an llm"}
+        return _split_note(
+            self._root, ref=ref, llm=self._llm, source=source,
+            tracer=self._tracer, max_fragments=max_fragments,
         )
