@@ -246,13 +246,16 @@ the **original biography retired to `.archive/`** (reversible, never deleted).
 
 ## House rules
 
-- **House git (fleet_git).** Primary clone stays on `main` and is never
-  checked out to a feature branch. Work happens in per-branch linked
-  worktrees under `zk-memory.wt/<branch>/`, mechanized by `git wt-new` /
-  `git wt-rm` — never hand-run `git worktree add`. Branch
-  `docs/<x>`/`fix/<x>`/`feat/<x>`/`task/<x>` → folder `docs--<x>`; the
-  `.wt/` namespace is **flat** (one worktree per branch, never category
-  subfolders). This repo has no prior mainline — the first commit *is* main.
+- **House git (fleet_git, two modes).** **Mode 1 — active iteration:** work on
+  `main`, commit small, revertable batches frequently, and never accumulate
+  uncommitted work (commit roughly every 30 min). Push to a branch and open a
+  PR when a change is ready; sync with origin/main before starting and before
+  a PR. **Mode 2 — parallel feature work:** use linked worktrees under
+  `zk-memory.wt/<branch>/`, mechanized by `git wt-new` / `git wt-rm` — never
+  hand-run `git worktree add`. Branch `docs/<x>`/`fix/<x>`/`feat/<x>`/
+  `task/<x>` → folder `docs--<x>`; the `.wt/` namespace is **flat** (one
+  worktree per branch, never category subfolders). This repo has no prior
+  mainline — the first commit *is* main.
   **Clean end-state (contract):** no stale worktrees, no leftover local
   branches beyond `main`, mainline at origin tip, primary clone clean. End
   every session by restoring it — or recording the deliberate deviation.

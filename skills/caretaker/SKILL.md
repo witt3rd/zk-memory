@@ -74,7 +74,11 @@ tests/          # pytest suite
 
 ## House git + caretaker loop
 
-- **Worktrees only** (`git wt-new <branch>` under `zk-memory.wt/`); primary clone stays on `main`.
+- **House git (fleet_git, two modes):** work on `main` during active iteration
+  with small, frequent, revertable commits (never accumulate uncommitted work);
+  use worktrees (`git wt-new <branch>` under `zk-memory.wt/`) only for parallel
+  feature work. Push to a branch + PR when a change is ready; sync with
+  origin/main before starting and before a PR.
 - Version bumps are real: feature → minor, tag + push the tag separately (`git tag -a vX.Y.Z -m ...`),
   then the plugin repins (`@vX.Y.Z`). Land the library, tag, then repin the plugin.
 - **Caretaker loop**: orient via the signalling handoff (`scripts/agent state` / latest `H--`
