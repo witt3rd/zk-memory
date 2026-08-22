@@ -245,10 +245,20 @@ the **original biography retired to `.archive/`** (reversible, never deleted).
 
 ## House rules
 
-- **House git.** Primary clone stays on `main` and is never checked out to a
-  feature branch. Work happens in per-branch linked worktrees under
-  `zk-memory.wt/<branch>/`, mechanized by `git wt-new` / `git wt-rm`. This
-  repo has no prior mainline — the first commit *is* main.
+- **House git (fleet_git).** Primary clone stays on `main` and is never
+  checked out to a feature branch. Work happens in per-branch linked
+  worktrees under `zk-memory.wt/<branch>/`, mechanized by `git wt-new` /
+  `git wt-rm` — never hand-run `git worktree add`. Branch
+  `docs/<x>`/`fix/<x>`/`feat/<x>`/`task/<x>` → folder `docs--<x>`; the
+  `.wt/` namespace is **flat** (one worktree per branch, never category
+  subfolders). This repo has no prior mainline — the first commit *is* main.
+  **Clean end-state (contract):** no stale worktrees, no leftover local
+  branches beyond `main`, mainline at origin tip, primary clone clean. End
+  every session by restoring it — or recording the deliberate deviation.
+- **Handoff channel.** This repo is dotagent-inhabited (`scripts/agent`), so
+  handoffs go through the event log: `scripts/agent handoff <subject>` and
+  orient via `scripts/agent state`. Never maintain a `.agent/HANDOFF.md` —
+  that convention is retired; the ledger replaces it.
 - **AGENTS.md is the single source of truth.** `README.md` is a symlink to
   this file for GitHub; there is no separate human doc to keep in sync.
 - **Reversible-first.** Prefer changes that are easy to revert; never leave
