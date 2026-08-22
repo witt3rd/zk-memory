@@ -11,6 +11,41 @@ The Hermes plugin `hermes-zk-memory` is one thin adapter over this library
 auxiliary-task forced-tool-call machinery). This repo is the standalone
 library the plugin wraps.
 
+## Why this exists
+
+Memory is **the mechanism by which past experience changes future behavior**.
+It is not retrieval. Retrieval is a read. Memory is a **write-then-use
+cycle**: something happens, it is persisted, later it changes what the
+agent does. Perfect recall with bad writes is bad memory.
+
+This library exists to **excel at that cycle**. The caretaker of this repo
+owns the *how* — the mechanisms that write, manage, and use a corpus of
+atomic notes. The sibling **`zk-memory-eval`** (`../zk-memory-eval/eval.md`)
+owns the *how we measure* — whether a change actually moved write, manage,
+or use, or we are just talking about it. `eval.md` is the living thesis;
+update it when we learn something about memory. Do not fork the thesis
+here.
+
+Three phases. Every feature maps to one (or is not a memory feature):
+
+1. **Write** — decide what to persist. Selection, compression, update.
+   Here: `retain_turn` / `integrate` / the distill+merge judges.
+   Good write is selective, accurate, merge-aware, noise-resistant.
+2. **Manage** — keep the store truthful over time. Belief revision,
+   eviction, consolidation, conflict resolution.
+   Here: `tend_writes`, `split_note`, append-only merge. Still thin —
+   notes mostly accumulate; nothing yet prunes or revises a superseded
+   belief. That gap is load-bearing, not a footnote.
+3. **Use** — persisted state changes later *actions*, not just later
+   answers. Here: `search` / `read` feeding the next turn. Coupling is
+   still indirect (the host decides what to do with hits). Good use is
+   action-coupled, latency-aware, abstention-capable.
+
+Good is not "high recall on a benchmark." A change that does not move
+write quality, store truth, or action-coupling is not a win — ship it
+only if eval can say so. Tokens/query and p95 latency travel with every
+accuracy number; a number without cost is not a measurement.
+
 ## Goals
 
 - **Host-agnostic core.** `zk_memory` has zero knowledge of Hermes, `agent.*`,
@@ -283,6 +318,14 @@ the **original biography retired to `.archive/`** (reversible, never deleted).
   (or `ZK_MEMORY_LLM_*` / `OMNIROUTE_*` env). The library itself stays
   provider-free; the CLI's `cli/llm.py` is the one place an HTTP client is
   imported (lazily, via the `cli-llm` extra).
+
+## Relationship to zk-memory-eval
+
+`zk-memory-eval` (`../zk-memory-eval`) is the measurement sibling. This
+repo is the *how*; that repo is the *how we know*. Its `eval.md` is the
+living thesis (what memory is, what good means, how we measure). Do not
+copy ambitions or scores here — change them there. A feature lands here
+only if eval can say it moved write, manage, or use.
 
 ## Relationship to hermes-zk-memory
 
