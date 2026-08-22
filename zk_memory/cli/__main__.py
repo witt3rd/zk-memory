@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 from zk_memory import list_notes, merge, read, search, tend, write
+from zk_memory.corpus import TEND_ACTIONS
 
 
 def _resolve_root(args) -> Path:
@@ -109,10 +110,11 @@ def _cmd_merge(args) -> int:
 
 
 def _cmd_tend(args) -> int:
-    if args.action not in ("repair", "check", "mint"):
-        print("error: action must be one of repair, check, mint")
+    if args.action not in TEND_ACTIONS:
+        print(f"error: action must be one of {', '.join(TEND_ACTIONS)}")
         return 2
-    result = tend(args.action, _resolve_root(args))
+    extra = ("--write",) if args.write else ()
+    result = tend(args.action, _resolve_root(args), *extra)
     head = "ok" if result.get("ok") else "FAILED"
     out = result.get("output") or result.get("err") or ""
     print(f"zk_tend {args.action}: {head}")
@@ -248,8 +250,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("fragment")
     p.set_defaults(func=_cmd_merge)
 
-    p = sub.add_parser("tend", help="Run a linlink maintenance action (repair/check/mint).")
+    p = sub.add_parser(
+        "tend",
+        help="Run a linlink maintenance action (repair/check/mint/robustify).",
+    )
     p.add_argument("action")
+    p.add_argument(
+        "--write",
+        action="store_true",
+        help="Apply mint/repair/robustify (default is a dry run).",
+    )
     p.set_defaults(func=_cmd_tend)
 
     p = sub.add_parser("retain", help="Retain one turn (distill -> merge|create). Requires an LLM.")
