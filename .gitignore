@@ -15,6 +15,7 @@ build/
 
 # zettelkasten corpus / index / diagnostic trace — user data, not committed
 zk/
+.zk/
 .zk-index/
 .zk-memory-trace.jsonl
 

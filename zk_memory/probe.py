@@ -7,17 +7,17 @@ decide", or "did it merge or create" short of watching the corpus
 directory for file changes. ``trace()`` is the fix: one call site, used
 on every success-path decision, that both logs at INFO (so it shows up
 in whatever the hosting process already captures) and appends a
-structured JSONL line beside the corpus for offline inspection —
+structured JSONL line inside the corpus's state sidecar for offline
+inspection —
 
-    <corpus-root-parent>/.zk-memory-trace.jsonl
+    <corpus-root>/.zk/trace.jsonl
 
-Sibling to the corpus, not inside it (same convention as the LanceDB
-index cache — see ``zk_memory.fts``: derived/diagnostic artifacts live
-beside the corpus directory, never inside it).
-
-Best-effort by design: a trace failure must never break the retain/
-recall it's describing. ``root=None`` (e.g. called before the corpus is
-resolved) skips the file write and only logs.
+Inside the sidecar, not beside the corpus — the library keeps ALL of its
+state under the one directory you pointed at (see ``zk_memory.sidecar``);
+it never leaks derived/diagnostic files into the parent. Best-effort by
+design: a trace failure must never break the retain/recall it's describing.
+``root=None`` (e.g. called before the corpus is resolved) skips the file
+write and only logs.
 """
 
 from __future__ import annotations
@@ -30,11 +30,10 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-_TRACE_FILENAME = ".zk-memory-trace.jsonl"
-
 
 def _trace_path(root: Path) -> Path:
-    return root.parent / _TRACE_FILENAME
+    from zk_memory.sidecar import trace_path
+    return trace_path(root)
 
 
 def trace(event: str, root: Optional[Path] = None, **fields: Any) -> None:

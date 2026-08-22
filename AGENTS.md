@@ -63,7 +63,8 @@ zk_memory/
   retain.py       # retain_turn / retain_messages / process_candidate (composes over integrate)
   split.py        # the de-merge spine: decide_split_fragments + split_note (Z12)
   judge.py        # StructuredLLM protocol + distill/merge/split prompts & schemas
-  probe.py        # trace(event, root, **fields) -> .zk-memory-trace.jsonl
+  probe.py        # trace(event, root, **fields) -> <root>/.zk/trace.jsonl
+  sidecar.py      # the .zk/ sidecar paths (lock, index/, trace.jsonl) — single source of truth
   cli/            # thin CLI: search / read / write / merge / tend / list / retain / integrate / split / tend-writes / split-candidates
   cli/llm.py      # CLI StructuredLLM over an OpenAI-compatible chat endpoint (optional httpx)
 tests/            # corpus ops, probe, judge (StructuredLLM stubs), retain, indexing, integrate, split, cli
@@ -196,9 +197,16 @@ the **original biography retired to `.archive/`** (reversible, never deleted).
 - **Corpus discipline.** Flat `YYYYMMDD-slug.md`; uuid minted via `linlink`
   (never hand-written), with an own-uuid fallback when linlink is absent.
   Plain-markdown links `[label](slug.md)`.
+- **State footprint — one `.zk/` sidecar inside the corpus.** Everything the
+  library plants (beside the notes) lives under `<root>/.zk/`, never beside
+  it in the parent: the merge lock (`.zk/lock`), the LanceDB FTS index
+  (`.zk/index/`), and the diagnostic trace (`.zk/trace.jsonl`). Retired notes
+  go to `<root>/.archive/` (reversible, never deleted). So "adopt = point at
+  the corpus dir" is self-contained — nothing leaks into the parent
+  directory. See `zk_memory/sidecar.py` (single source of path truth).
 - **Diagnostics.** `probe.trace(event, root, **fields)` logs at INFO and
-  appends one JSONL line to `<root-parent>/.zk-memory-trace.jsonl`. Never
-  raises; a trace failure must never break the retain it describes.
+  appends one JSONL line to `<root>/.zk/trace.jsonl`. Never raises; a trace
+  failure must never break the retain it describes.
 - **Shared / multi-host corpora** (e.g. a NAS every agent reads and writes).
   Use the `rg` search backend (`Memory(backend="rg")`, `search(..., backend="rg")`,
   or env `ZK_MEMORY_BACKEND=rg`) — the LanceDB index is single-writer and unsafe

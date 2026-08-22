@@ -190,6 +190,13 @@ def _resolve_source(source: Optional[str]) -> Optional[str]:
     return os.environ.get("ZK_MEMORY_SOURCE") or None
 
 
+def _sidecar_lock(root: Path) -> Path:
+    """The corpus-wide merge flock lives in the state sidecar (not beside
+    the corpus)."""
+    from zk_memory.sidecar import lock_path
+    return lock_path(root)
+
+
 def _ensure_field(path: Path, key: str, value: str) -> bool:
     """Insert ``key: value`` into a note's YAML frontmatter if absent.
 
@@ -352,7 +359,8 @@ def merge(
     fpath = root / note["path"]
     source = _resolve_source(source)
 
-    lock_path = root / ".zk.lock"
+    lock_path = _sidecar_lock(root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
