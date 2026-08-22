@@ -64,8 +64,9 @@ zk_memory/
   split.py        # the de-merge spine: decide_split_fragments + split_note (Z12)
   judge.py        # StructuredLLM protocol + distill/merge/split prompts & schemas
   probe.py        # trace(event, root, **fields) -> .zk-memory-trace.jsonl
-  cli/            # thin CLI: search / read / write / merge / tend / list
-tests/            # corpus ops, probe, judge (StructuredLLM stubs), retain, indexing, integrate, split
+  cli/            # thin CLI: search / read / write / merge / tend / list / retain / integrate / split / tend-writes / split-candidates
+  cli/llm.py      # CLI StructuredLLM over an OpenAI-compatible chat endpoint (optional httpx)
+tests/            # corpus ops, probe, judge (StructuredLLM stubs), retain, indexing, integrate, split, cli
 ```
 
 ## Concepts
@@ -253,6 +254,14 @@ the **original biography retired to `.archive/`** (reversible, never deleted).
   this file for GitHub; there is no separate human doc to keep in sync.
 - **Reversible-first.** Prefer changes that are easy to revert; never leave
   the repo worse than you found it.
+- **All functionality and configuration is reachable via CLI arguments.**
+  Nothing is library-only. Every `Memory` method and corpus function has a
+  `zk-memory <command>` counterpart, and every knob (root, backend, LLM
+  endpoint, split cap, kinds, source) is a CLI argument or env var — not a
+  code change. LLM-backed commands take `--llm-model/--llm-base/--llm-key`
+  (or `ZK_MEMORY_LLM_*` / `OMNIROUTE_*` env). The library itself stays
+  provider-free; the CLI's `cli/llm.py` is the one place an HTTP client is
+  imported (lazily, via the `cli-llm` extra).
 
 ## Relationship to hermes-zk-memory
 
