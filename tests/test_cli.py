@@ -49,6 +49,29 @@ def _stub_cli_llm(monkeypatch, result):
     monkeypatch.setattr(cli_llm, "CliLLM", lambda **kw: _Stub())
 
 
+def test_tend_accepts_robustify_and_write(root, monkeypatch, capsys):
+    from zk_memory.cli import __main__ as cli
+    seen = {}
+
+    def _fake_tend(action, root_path, *args):
+        seen["action"] = action
+        seen["args"] = args
+        return {"ok": True, "output": "would anchor: 0", "err": ""}
+
+    monkeypatch.setattr(cli, "tend", _fake_tend)
+    rc, out = _run(["tend", "robustify", "--write"], capsys)
+    assert rc == 0
+    assert seen["action"] == "robustify"
+    assert seen["args"] == ("--write",)
+    assert "ok" in out
+
+
+def test_tend_rejects_unknown_action(root, capsys):
+    rc, out = _run(["tend", "frobnicate"], capsys)
+    assert rc == 2
+    assert "robustify" in out
+
+
 def test_search(root, capsys):
     Memory(root=root).write("hello", "Hello", "hello world body")
     rc, out = _cli_main(["search", "hello"], capsys)

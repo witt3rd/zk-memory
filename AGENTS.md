@@ -100,7 +100,7 @@ zk_memory/
   judge.py        # StructuredLLM protocol + distill/merge/split prompts & schemas
   probe.py        # trace(event, root, **fields) -> <root>/.zk/trace.jsonl
   sidecar.py      # the .zk/ sidecar paths (lock, index/, trace.jsonl) — single source of truth
-  cli/            # thin CLI: search / read / write / merge / tend / list / retain / integrate / split / tend-writes / split-candidates
+  cli/            # thin CLI: search / read / write / merge / tend (check/repair/mint/robustify) / list / retain / integrate / split / tend-writes / split-candidates
   cli/llm.py      # CLI StructuredLLM over an OpenAI-compatible chat endpoint (optional httpx)
 tests/            # corpus ops, probe, judge (StructuredLLM stubs), retain, indexing, integrate, split, cli
 ```
@@ -168,7 +168,7 @@ highest-priority candidates and reconciles each — merges a duplicate into
 an existing note (append-only fold) and retires it to `.archive/`
 (reversible, never deleted), or appends `[label](slug.md)` out-links so
 the graph grows. `decision` notes never merge. This is distinct from
-`tend` (linlink structure hygiene: repair/check/mint). Capture fast,
+  `tend` (linlink structure hygiene: repair/check/mint/robustify). Capture fast,
 integrate later; recency is the priority.
 3. **Write** — `merge` (append-only) or `write` (new note).
 
@@ -231,7 +231,11 @@ the **original biography retired to `.archive/`** (reversible, never deleted).
 
 - **Corpus discipline.** Flat `YYYYMMDD-slug.md`; uuid minted via `linlink`
   (never hand-written), with an own-uuid fallback when linlink is absent.
-  Plain-markdown links `[label](slug.md)`.
+  Plain-markdown links `[label](slug.md)`. `tend` is the link-integrity
+  gate (check / repair / mint / robustify). It walks up from the corpus
+  root to find `linlink.toml` and runs linlink from that directory — so
+  an adopted corpus in a subdir (`genesis/zk`) still resolves `lin:`
+  citations. `darnlink` is the old name; do not call it.
 - **State footprint — one `.zk/` sidecar inside the corpus.** Everything the
   library plants (beside the notes) lives under `<root>/.zk/`, never beside
   it in the parent: the merge lock (`.zk/lock`), the LanceDB FTS index
@@ -249,7 +253,7 @@ the **original biography retired to `.archive/`** (reversible, never deleted).
   writers degrade gracefully; `flock` is best-effort only across hosts (the
   O_APPEND append is the real atomicity). Pass `source=` (host/agent name, or
   env `ZK_MEMORY_SOURCE`) to `write`/`merge`/`retain_*` for attribution. Give
-  `tend`/`check`/`repair`/`mint` to **one** caretaker host, never concurrent
+  `tend`/`check`/`repair`/`mint`/`robustify` to **one** caretaker host, never concurrent
   across hosts.
 - **Recall is a pluggable engine** (`indexing.IndexProvider`). `corpus.search`
   and `Memory` resolve it three ways, in precedence: an injected

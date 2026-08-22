@@ -382,18 +382,51 @@ def merge(
 # Tend — maintenance operations
 # ---------------------------------------------------------------------------
 
+TEND_ACTIONS = ("repair", "check", "mint", "robustify")
+
+
+def linlink_config_dir(root: Path) -> Path:
+    """Directory whose ``linlink.toml`` (or ``[tool.linlink]``) applies.
+
+    linlink loads its corpus map from *cwd*, not from the scan path. Adopted
+    corpora often live in a subdir (``genesis/zk``) while the map lives at
+    the repo root. Walk ``root`` then parents; fall back to ``root``.
+    """
+    here = Path(root).resolve()
+    for cand in (here, *here.parents):
+        if (cand / "linlink.toml").is_file():
+            return cand
+        py = cand / "pyproject.toml"
+        if py.is_file():
+            try:
+                text = py.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if "[tool.linlink]" in text:
+                return cand
+    return here
+
+
 def tend(action: str, root: Path, *args: str) -> dict[str, Any]:
     """Run a linlink maintenance action on the corpus.
 
-    action in {"repair", "check", "mint"} — maps to the linlink CLI. Never
-    raises; returns {ok, output, err}.
+    action in {"repair", "check", "mint", "robustify"} — maps to the linlink
+    CLI. Runs with cwd at the nearest ``linlink.toml`` so cross-corpus
+    ``lin:`` citations resolve. Never raises; returns {ok, output, err}.
     """
     linlink = shutil.which("linlink")
     if not linlink:
         return {"ok": False, "output": "", "err": "linlink not on PATH"}
     cmd = [linlink, action, *args, "--", str(root)]
+    cfg = linlink_config_dir(root)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=cfg if cfg.is_dir() else None,
+        )
         return {"ok": proc.returncode == 0, "output": proc.stdout, "err": proc.stderr}
     except (subprocess.TimeoutExpired, OSError) as e:
         return {"ok": False, "output": "", "err": str(e)}
