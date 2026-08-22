@@ -13,11 +13,11 @@ def test_trace_with_no_root_only_logs(caplog):
     assert any("some_event" in r.message for r in caplog.records)
 
 
-def test_trace_with_root_writes_jsonl_beside_corpus(tmp_path):
+def test_trace_with_root_writes_jsonl_in_sidecar(tmp_path):
     root = tmp_path / "zk"
     probe.trace("initialized", root, session_id="abc123")
 
-    trace_file = tmp_path / ".zk-memory-trace.jsonl"
+    trace_file = tmp_path / "zk" / ".zk" / "trace.jsonl"
     assert trace_file.is_file()
     line = json.loads(trace_file.read_text().strip())
     assert line["event"] == "initialized"
@@ -30,7 +30,7 @@ def test_trace_appends_multiple_events(tmp_path):
     probe.trace("event_one", root)
     probe.trace("event_two", root, n=2)
 
-    trace_file = tmp_path / ".zk-memory-trace.jsonl"
+    trace_file = tmp_path / "zk" / ".zk" / "trace.jsonl"
     lines = [json.loads(l) for l in trace_file.read_text().splitlines()]
     assert [l["event"] for l in lines] == ["event_one", "event_two"]
     assert lines[1]["n"] == 2
@@ -45,7 +45,7 @@ def test_trace_never_raises_on_unserializable_field(tmp_path):
 
     # default=str in json.dumps should handle this rather than raising.
     probe.trace("weird_event", root, thing=Unserializable())
-    trace_file = tmp_path / ".zk-memory-trace.jsonl"
+    trace_file = tmp_path / "zk" / ".zk" / "trace.jsonl"
     line = json.loads(trace_file.read_text().strip())
     assert line["thing"] == "<unserializable>"
 

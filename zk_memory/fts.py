@@ -60,7 +60,7 @@ def run_fts(
     import pyarrow as pa
     from lancedb.index import FTS
 
-    index_dir = root.parent / ".zk-index"
+    index_dir = _sidecar_index(root)
     index_dir.mkdir(parents=True, exist_ok=True)
     db = lancedb.connect(str(index_dir))
     table_name = "notes"
@@ -111,6 +111,11 @@ def _table_exists(db: Any, name: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def _sidecar_index(root: Path) -> Path:
+    from zk_memory.sidecar import index_dir
+    return index_dir(root)
 
 
 def _snippet(text: str, query: str, radius: int = 160) -> str:
