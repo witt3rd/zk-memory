@@ -19,6 +19,9 @@ lancedb = ["lancedb>=0.15", "pyarrow>=14"]
 # Vector similarity recall. Optional: the VectorProvider degrades to [] when
 # faiss isn't installed (the embedder is always caller-supplied, like the LLM).
 faiss = ["faiss-cpu>=1.15"]
+# LLM-backed CLI commands (retain / tend-writes / split / integrate). The
+# library itself never imports httpx; only the CLI's chat adapter needs it.
+cli-llm = ["httpx>=0.27"]
 test = ["pytest>=7"]
 
 [project.scripts]
